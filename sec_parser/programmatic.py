@@ -186,6 +186,12 @@ def collapse_row(row: list[str]) -> list[str]:
                 merged.append(cell)
                 i += 1
 
+        # Percentage symbol — merge with previous value cell
+        elif cell == "%":
+            if merged:
+                merged[-1] = merged[-1] + "%"
+            i += 1
+
         # Standalone closing paren — already handled above, skip if leftover
         elif cell == ")":
             i += 1
@@ -320,6 +326,7 @@ def _render_markdown_table(
         while len(padded) < col_count:
             padded.append("")
         padded = padded[:col_count]
+        padded = [re.sub(r"\s+", " ", c.replace("\n", " ")).strip() for c in padded]
         lines.append("| " + " | ".join(padded) + " |")
 
     # If no headers were provided, add a blank header
@@ -333,6 +340,7 @@ def _render_markdown_table(
         while len(padded) < col_count:
             padded.append("")
         padded = padded[:col_count]
+        padded = [re.sub(r"\s+", " ", c.replace("\n", " ")).strip() for c in padded]
         lines.append("| " + " | ".join(padded) + " |")
 
     return "\n".join(lines)
@@ -354,7 +362,10 @@ def tables_to_markdown(
     - When normalized_data_out is provided (a list), appends normalized rows to it
     """
     if not tables:
-        return section_text  # no tables, return raw text
+        # Strip standalone page numbers before returning raw text
+        lines = section_text.splitlines()
+        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+        return "\n".join(lines)
 
     # Filter out "tables" that are really just text paragraphs
     # (pdfplumber sometimes misidentifies prose as a table)
@@ -393,6 +404,33 @@ def tables_to_markdown(
     if not collapsed_tables:
         return section_text
 
+    # Fix 5A: Strip mid-table repeated headers (date/period rows, scale indicators)
+    _mid_header_re = re.compile(
+        r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{1,2}",
+        re.IGNORECASE,
+    )
+    _scale_re = re.compile(r"^\(?\s*in\s+(?:thousands|millions|billions)", re.IGNORECASE)
+    for ti, table in enumerate(collapsed_tables):
+        cleaned: list[list[str]] = []
+        for row in table:
+            non_empty = [c for c in row if c.strip()]
+            if non_empty and all(not _is_numeric(c) for c in non_empty):
+                # All non-numeric — check if it's a repeated date/scale header
+                joined = " ".join(non_empty)
+                if _mid_header_re.search(joined) and len(non_empty) <= 3:
+                    continue  # skip repeated date header
+                if _scale_re.match(joined):
+                    continue  # skip scale indicator
+            cleaned.append(row)
+        collapsed_tables[ti] = cleaned
+
+    # Fix 5B: Label anonymous subtotal rows (single numeric cell, no label)
+    for table in collapsed_tables:
+        for ri, row in enumerate(table):
+            if len(row) == 1 and _is_numeric(row[0]) and row[0].strip() not in ("—", "-", "–", ""):
+                table[ri] = ["Total", row[0]]
+
     # If tables lack meaningful row labels (e.g. IFRS PDFs where pdfplumber
     # captures numbers but labels are only in the text), fall back to section text.
     total_rows = 0
@@ -422,11 +460,18 @@ def tables_to_markdown(
             prev_lengths = Counter(len(r) for r in merged[-1])
             prev_dominant = prev_lengths.most_common(1)[0][0]
             if dominant_len == prev_dominant:
-                # Skip header row of continuation if it looks like the first table's header
-                start = 0
-                if table[0] == merged[-1][0]:
-                    start = 1
-                merged[-1].extend(table[start:])
+                # Check heuristics before merging
+                first = table[0]
+                filled = [c for c in first if c.strip()]
+                is_title = len(filled) == 1 and not _is_numeric(filled[0])
+                both_small = len(merged[-1]) < 15 and len(table) < 15
+
+                if is_title or both_small:
+                    merged.append(table)  # separate tables
+                else:
+                    # Multi-page continuation — merge
+                    start = 1 if table[0] == merged[-1][0] else 0
+                    merged[-1].extend(table[start:])
                 continue
         merged.append(table)
 
@@ -452,22 +497,22 @@ def tables_to_markdown(
                 if has_label and has_value:
                     table[ri] = row + ["—"] * (col_count - len(row))
 
-        # Check if first row looks like a section label (single non-numeric cell)
-        # rather than data — use it as the first data row, not header
+        # Check if the table's own first row serves as headers
         first_row = table[0]
-        all_data_rows = table
+        non_empty = [c for c in first_row if c.strip()]
+        non_numeric_header = (
+            len(non_empty) > 1
+            and all(not _is_numeric(c) for c in non_empty if c.strip())
+        )
 
-        # Build header rows from detected text headers
-        header_rows = _build_header_rows(period_headers, year_columns, col_count)
-
-        # If first row is a label-only row (e.g. "Revenue"), keep it as data
-        # If first row looks like column headers, use it instead
-        if not header_rows:
-            # Check if first row has mostly non-numeric content (could be headers)
-            non_empty = [c for c in first_row if c.strip()]
-            if len(non_empty) > 1 and all(not _is_numeric(c) for c in non_empty if c.strip()):
-                header_rows = [first_row]
-                all_data_rows = table[1:]
+        if non_numeric_header:
+            # Table has its own headers (e.g. Level 1/2/3, As Reported/Adjusted)
+            header_rows = [first_row]
+            all_data_rows = table[1:]
+        else:
+            # Build header rows from detected text headers (periods/years)
+            header_rows = _build_header_rows(period_headers, year_columns, col_count)
+            all_data_rows = table
 
         # Normalize line items when taxonomy is provided
         left_cols = 1
@@ -490,6 +535,32 @@ def tables_to_markdown(
 
 
 # ---------------------------------------------------------------------------
+# Notes fallback (when Gemini is unavailable)
+# ---------------------------------------------------------------------------
+
+def process_notes_fallback(
+    section_text: str,
+    tables: list[list[list[str]]],
+) -> str:
+    """Process Notes section without LLM — clean prose and render tables inline.
+
+    Unlike financial statements, Notes tables don't use taxonomy normalization.
+    Each table uses its own first-row headers (handled by tables_to_markdown with
+    the per-table header priority from Fix 1B).
+    """
+    # Start with prose cleanup to get ### headings, then append rendered tables
+    prose = clean_prose(section_text)
+    if not tables:
+        return prose
+
+    table_md = tables_to_markdown(section_text, tables)
+    # If tables were rendered, append them after the prose
+    if "|" in table_md:
+        return prose + "\n\n" + table_md
+    return prose
+
+
+# ---------------------------------------------------------------------------
 # Prose cleanup
 # ---------------------------------------------------------------------------
 
@@ -507,6 +578,15 @@ def clean_prose(section_text: str, tables: list[list[list[str]]] | None = None) 
 
     # Remove standalone page numbers
     lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+
+    # Remove standalone F-N page references
+    lines = [l for l in lines if not re.match(r"^\s*F-\d{1,3}\s*$", l)]
+
+    # Strip trailing F-N page references from prose lines (not table rows)
+    lines = [
+        re.sub(r"\s+F-\d{1,3}\.?\s*$", "", l) if not l.lstrip().startswith("|") else l
+        for l in lines
+    ]
 
     # Detect repeated page headers (lines appearing 3+ times)
     line_counts: Counter[str] = Counter()
@@ -530,7 +610,7 @@ def clean_prose(section_text: str, tables: list[list[list[str]]] | None = None) 
         # Add markdown headings for Item headers
         item_match = re.match(r"^(Item\s+\d+[A-Za-z]?\.\s+.+)$", stripped, re.IGNORECASE)
         if item_match:
-            result_lines.append(f"## {item_match.group(1)}")
+            result_lines.append(f"### {item_match.group(1)}")
             continue
 
         # Detect sub-headings: short title-case lines with most words capitalized
