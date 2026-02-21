@@ -238,7 +238,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
     for key in FINANCIAL_STATEMENTS:
         if key in sections:
             m = re.search(
-                r"\(in\s+(?:thousands|millions|billions)[^)]*\)",
+                r"\(in\s+(?:\w+\s+)?(?:thousands|millions|billions)[^)]*\)",
                 sections[key].text,
                 re.IGNORECASE,
             )
