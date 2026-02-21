@@ -10,8 +10,11 @@ from collections import Counter
 # Cover Page
 # ---------------------------------------------------------------------------
 
-def parse_cover_page(text: str) -> str:
-    """Extract cover page metadata via regex and return a markdown table."""
+def extract_cover_fields(text: str) -> list[tuple[str, str]]:
+    """Extract cover page metadata fields via regex.
+
+    Returns a list of (label, value) tuples with all detected fields.
+    """
     fields: list[tuple[str, str]] = []
 
     # Filing type
@@ -73,6 +76,13 @@ def parse_cover_page(text: str) -> str:
     if m:
         exchange = m.group(1).strip().rstrip(".")
         fields.append(("Exchange", exchange))
+
+    return fields
+
+
+def parse_cover_page(text: str) -> str:
+    """Extract cover page metadata via regex and return a markdown table."""
+    fields = extract_cover_fields(text)
 
     if not fields:
         return text  # fallback — return raw text if nothing matched
