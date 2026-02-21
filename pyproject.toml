@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sec-parser"
 version = "0.1.0"
-description = "Batch-process SEC 10-K and 10-Q financial PDFs into structured markdown"
+description = "Batch-process financial report PDFs (SEC and IFRS) into structured markdown"
 requires-python = ">=3.10"
 dependencies = [
     "pdfplumber>=0.11",
