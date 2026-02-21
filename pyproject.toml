@@ -12,5 +12,11 @@ dependencies = [
     "google-genai>=1.0",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.scripts]
 sec-parse = "sec_parser.cli:main"
