@@ -8,7 +8,9 @@ from pathlib import Path
 
 from .gemini_client import extract_notes
 from .metadata import extract_metadata
+from .normalize import load_taxonomy
 from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, tables_to_markdown
+from .validate import extract_statement_data, render_validation_markdown, run_all_checks
 from .markdown_writer import assemble_markdown, write_markdown
 from .pdf_extract import detect_scanned, extract_pdf
 from .section_split import (
@@ -32,6 +34,13 @@ from .section_split import (
 FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY]
 PROSE_SECTIONS = [MDA, MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
 PASSTHROUGH_SECTIONS = [EXHIBITS, SIGNATURES]
+
+# Map section keys to validation statement types
+STATEMENT_TYPE_MAP = {
+    INCOME_STATEMENT: "income_statement",
+    BALANCE_SHEET: "balance_sheet",
+    CASH_FLOW: "cash_flow",
+}
 
 
 def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path:
@@ -66,19 +75,29 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
 
     processed: dict[str, str] = {}
 
+    # Load taxonomy for line-item normalization
+    taxonomy = load_taxonomy()
+
     # Cover page — programmatic regex extraction
     if COVER_PAGE in sections:
         if verbose:
             print(f"  Processing {SECTION_TITLES[COVER_PAGE]}...", file=sys.stderr)
         processed[COVER_PAGE] = parse_cover_page(sections[COVER_PAGE].text)
 
-    # Financial statements — programmatic table collapse (no LLM)
+    # Financial statements — programmatic table collapse with normalization
+    normalized_rows: dict[str, list[list[str]]] = {}
     for key in FINANCIAL_STATEMENTS:
         if key in sections:
             section = sections[key]
             if verbose:
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
-            processed[key] = tables_to_markdown(section.text, section.tables)
+            rows_out: list[list[str]] = []
+            processed[key] = tables_to_markdown(
+                section.text, section.tables,
+                taxonomy=taxonomy, normalized_data_out=rows_out,
+            )
+            if key in STATEMENT_TYPE_MAP:
+                normalized_rows[key] = rows_out
 
     # Notes — keep LLM (only remaining API call)
     if NOTES in sections:
@@ -130,8 +149,26 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
         source_pdf=pdf_path.name,
     )
 
+    # Run validation checks on normalized financial data
+    statements: dict[str, dict[str, list[float]]] = {}
+    for key, stmt_type in STATEMENT_TYPE_MAP.items():
+        if key in normalized_rows:
+            stmt_data = extract_statement_data(normalized_rows[key])
+            if stmt_data:
+                statements[stmt_type] = stmt_data
+
+    validation_md = ""
+    if statements:
+        results = run_all_checks(statements)
+        validation_md = render_validation_markdown(results)
+        if verbose and results:
+            print(f"  Validation: {len(results)} checks run", file=sys.stderr)
+
     # Assemble and write output
-    md_content = assemble_markdown(pdf_path.name, processed, metadata=metadata)
+    md_content = assemble_markdown(
+        pdf_path.name, processed, metadata=metadata,
+        validation_markdown=validation_md,
+    )
     output_path = output_dir / f"{pdf_path.stem}.md"
     write_markdown(output_path, md_content)
 
