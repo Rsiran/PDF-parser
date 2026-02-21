@@ -36,7 +36,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
 
     # Period of report
     m = re.search(
-        r"(?:(?:quarterly|annual)\s+period\s+ended|period\s+of\s+report)[:\s]+(\w+\s+\d{1,2},?\s+\d{4})",
+        r"(?:(?:quarterly|annual)\s+period\s+ended|(?:fiscal\s+)?year\s+ended|period\s+of\s+report)[:\s]+(\w+\s+\d{1,2},?\s+\d{4})",
         text,
         re.IGNORECASE,
     )
@@ -59,13 +59,46 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         fields.append(("Shares Outstanding", m.group(1).strip()))
 
     # Trading Symbol / Ticker
-    m = re.search(
-        r"Trading\s+Symbol[:\s]+([A-Z]+)",
+    # SEC 12(b) table format: header line with "Trading Symbol" followed by
+    # data lines like "Class A common stock, $0.001 par value ASST The Nasdaq ..."
+    header_match = re.search(
+        r"Title\s+of\s+Each\s+Class\s+Trading\s+Symbol",
         text,
         re.IGNORECASE,
     )
-    if m:
-        fields.append(("Ticker", m.group(1).strip()))
+    ticker_found = False
+    if header_match:
+        # Look at lines after the header for ticker data rows
+        after_header = text[header_match.end():]
+        for line in after_header.splitlines()[:10]:
+            line_s = line.strip()
+            # Skip the header continuation line and empty lines
+            if not line_s or "exchange" in line_s.lower() or "registered" in line_s.lower():
+                continue
+            if line_s.lower().startswith("indicate"):
+                break
+            # Data line pattern: description ending with "par value [per share]",
+            # "stock", "warrant", etc., then TICKER (2-5 uppercase letters),
+            # then exchange name. Also handle "N/A" as no ticker.
+            ticker_m = re.search(
+                r"(?:par\s+value(?:\s+per\s+share)?|per\s+share|stock|warrant[s]?|unit[s]?|right[s]?|debenture[s]?|shares)\s+([A-Z]{2,5})\s",
+                line_s,
+            )
+            if ticker_m:
+                tok = ticker_m.group(1)
+                if tok not in ("THE", "LLC", "INC", "NYSE", "EACH", "NAME"):
+                    fields.append(("Ticker", tok))
+                    ticker_found = True
+                    break
+    if not ticker_found:
+        # Fallback: inline format "Trading Symbol(s): AAPL" or "Trading Symbol(s) AAPL"
+        m = re.search(
+            r"Trading\s+Symbol\(?s?\)?[:\s]+([A-Z]{2,5})\b",
+            text,
+            re.IGNORECASE,
+        )
+        if m and m.group(1).upper() not in ("NAME", "THE", "OF", "EACH"):
+            fields.append(("Ticker", m.group(1).strip()))
 
     # Exchange
     m = re.search(
