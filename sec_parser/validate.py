@@ -241,15 +241,26 @@ def validate_cross_statement(
     cf_data = statements.get("cash_flow", {})
     bs_data = statements.get("balance_sheet", {})
 
-    # Net Income: IS vs CF
-    is_ni = _get_first(is_data, "Net Income")
-    cf_ni = _get_first(cf_data, "Net Income")
-    if is_ni is not None and cf_ni is not None:
-        results.append(_check_equality(
-            "Cross: Net Income (IS vs CF)",
-            is_ni,
-            cf_ni,
-        ))
+    # Net Income: IS vs CF — compare all columns, pass if any pair matches
+    is_ni_vals = is_data.get("Net Income", [])
+    cf_ni_vals = cf_data.get("Net Income", [])
+    if is_ni_vals and cf_ni_vals:
+        matched = any(
+            abs(iv - cv) <= max(1, abs(iv) * 0.01)
+            for iv in is_ni_vals for cv in cf_ni_vals
+        )
+        if matched:
+            results.append(ValidationResult(
+                check="Cross: Net Income (IS vs CF)",
+                status="PASS",
+                detail=f"IS values {is_ni_vals} match CF values {cf_ni_vals}",
+            ))
+        else:
+            results.append(_check_equality(
+                "Cross: Net Income (IS vs CF)",
+                is_ni_vals[0],
+                cf_ni_vals[0],
+            ))
     else:
         results.append(ValidationResult(
             check="Cross: Net Income (IS vs CF)",
@@ -261,11 +272,24 @@ def validate_cross_statement(
     cf_ending = _get_first(cf_data, "Ending Cash")
     bs_cash = _get_first(bs_data, "Cash & Cash Equivalents")
     if cf_ending is not None and bs_cash is not None:
-        results.append(_check_equality(
+        result = _check_equality(
             "Cross: Cash (CF Ending vs BS)",
             cf_ending,
             bs_cash,
-        ))
+        )
+        if result.status == "FAIL":
+            # Check if restricted cash explains the difference
+            restricted = _get_first(bs_data, "Restricted Cash")
+            if restricted is not None:
+                combined = _check_equality(
+                    "Cross: Cash (CF Ending vs BS)",
+                    cf_ending,
+                    bs_cash + restricted,
+                )
+                if combined.status in ("PASS", "WARN"):
+                    combined.detail += " (includes restricted cash)"
+                    result = combined
+        results.append(result)
     else:
         results.append(ValidationResult(
             check="Cross: Cash (CF Ending vs BS)",

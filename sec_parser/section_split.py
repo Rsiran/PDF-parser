@@ -51,7 +51,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         BALANCE_SHEET,
         re.compile(
-            r"(?:CONDENSED\s+)?CONSOLIDATED\s+BALANCE\s+SHEETS?",
+            r"(?:CONDENSED\s+)?CONSOLIDATED\s+(?:BALANCE\s+SHEETS?|STATEMENTS?\s+OF\s+FINANCIAL\s+CONDITION)",
             re.IGNORECASE,
         ),
     ),
@@ -74,7 +74,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         NOTES,
         re.compile(
-            r"NOTES\s+TO\s+(?:THE\s+)?(?:CONDENSED\s+)?(?:CONSOLIDATED\s+)?(?:CONDENSED\s+)?FINANCIAL\s+STATEMENTS",
+            r"NOTES\s+TO\s+(?:THE\s+)?(?:CONDENSED\s+)?(?:CONSOLIDATED\s+)?(?:CONDENSED\s+)?(?:INTERIM\s+)?FINANCIAL\s+STATEMENTS",
             re.IGNORECASE,
         ),
     ),
@@ -164,7 +164,22 @@ def _find_section_starts(pages: list[PageData]) -> list[tuple[str, int]]:
         for key, pattern in SECTION_PATTERNS:
             if key in seen_keys:
                 continue
-            if pattern.search(page.text):
+            m = pattern.search(page.text)
+            if m:
+                # Verify the match is on a standalone heading line,
+                # not embedded in a long prose sentence.
+                line_start = page.text.rfind('\n', 0, m.start()) + 1
+                line_end = page.text.find('\n', m.end())
+                if line_end == -1:
+                    line_end = len(page.text)
+                matched_line = page.text[line_start:line_end].strip()
+                if len(matched_line) > 120:
+                    continue  # embedded in prose, not a heading
+                # If there's significant text before the match on the
+                # same line, it's mid-sentence, not a heading.
+                prefix = page.text[line_start:m.start()].strip()
+                if len(prefix) > 10:
+                    continue
                 found.append((key, page.page_number))
                 seen_keys.add(key)
 

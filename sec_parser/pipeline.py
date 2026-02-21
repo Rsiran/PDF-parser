@@ -20,7 +20,7 @@ from .ifrs_section_split import (
 )
 from .metadata import extract_metadata
 from .normalize import load_taxonomy
-from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, tables_to_markdown
+from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, process_notes_fallback, tables_to_markdown
 from .validate import extract_statement_data, render_validation_markdown, run_all_checks
 from .markdown_writer import (
     IFRS_REQUIRED_SECTIONS,
@@ -213,7 +213,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
                 f"  WARNING: Notes extraction failed ({exc}), using raw text",
                 file=sys.stderr,
             )
-            processed[NOTES] = sections[NOTES].text
+            processed[NOTES] = process_notes_fallback(sections[NOTES].text, sections[NOTES].tables)
 
     # Prose sections — programmatic cleanup (no LLM)
     for key in PROSE_SECTIONS:
@@ -223,10 +223,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
             processed[key] = clean_prose(section.text, section.tables)
 
-    # Passthrough sections (raw text, no LLM)
+    # Passthrough sections (light cleanup, no LLM)
     for key in PASSTHROUGH_SECTIONS:
         if key in sections:
-            processed[key] = sections[key].text
+            processed[key] = clean_prose(sections[key].text)
 
     # Extract metadata from cover page fields
     cover_fields: list[tuple[str, str]] = []

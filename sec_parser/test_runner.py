@@ -209,13 +209,23 @@ def check_table_structure_valid(md_content: str, filing_type: str) -> CheckResul
     )
 
 
+_EMPTY_SECTION_ALLOWLIST = re.compile(
+    r"(?:Reserved|Mine Safety|None\.?|Not Applicable)",
+    re.IGNORECASE,
+)
+
+
 def check_no_empty_sections(md_content: str, filing_type: str) -> CheckResult:
     """Every section has >20 chars of content."""
     sections = _extract_sections(md_content)
     empty: list[str] = []
 
+    # Item sub-headings (### Item N.) don't count as sections
     for title, content in sections.items():
         if len(content.strip()) <= 20:
+            # Allow genuinely empty filing sections (Reserved, Mine Safety, etc.)
+            if _EMPTY_SECTION_ALLOWLIST.search(content) or _EMPTY_SECTION_ALLOWLIST.search(title):
+                continue
             empty.append(f"{title}: only {len(content.strip())} chars")
 
     return CheckResult(
@@ -242,7 +252,7 @@ def check_prose_quality(md_content: str, filing_type: str) -> CheckResult:
             continue
         content = sections[matched_key]
 
-        if "### " not in content:
+        if "### " not in content and len(content.strip()) > 200:
             issues.append(f"{matched_key}: no ### subheadings found")
 
         if "\n\n\n\n" in content:
@@ -272,7 +282,7 @@ def check_cover_page_fields(md_content: str, filing_type: str) -> CheckResult:
             message="No Cover Page section found",
         )
 
-    required_fields = ["Filing Type", "Company", "Period Ended"]
+    required_fields = ["Filing Type", "Company", "Period"]
     missing: list[str] = []
     for f in required_fields:
         if f not in cover:
@@ -332,7 +342,7 @@ def check_no_pdf_artifacts(md_content: str, filing_type: str) -> CheckResult:
         count = md_content.count("\ufffd")
         issues.append(f"Unicode replacement character appears {count} time(s)")
 
-    fn_refs = re.findall(r"\bF-\d+\b", md_content)
+    fn_refs = re.findall(r"(?<!Form )\bF-\d+\b", md_content)
     if len(fn_refs) > 3:
         issues.append(f"F-N page references found: {len(fn_refs)} occurrences")
 

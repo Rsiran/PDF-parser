@@ -140,6 +140,12 @@ balance_sheet:
       - "Cash and cash equivalents"
       - "Cash"
       - "Cash, cash equivalents and restricted cash"
+  restricted_cash:
+    canonical: "Restricted Cash"
+    aliases:
+      - "Restricted cash"
+      - "Restricted cash, current"
+      - "Restricted cash and cash equivalents"
   short_term_investments:
     canonical: "Short-Term Investments"
     aliases:
