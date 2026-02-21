@@ -1,0 +1,355 @@
+income_statement:
+  revenue:
+    canonical: "Revenue"
+    aliases:
+      - "Net revenues"
+      - "Total revenues"
+      - "Net sales"
+      - "Total net revenues"
+      - "Revenue, net"
+      - "Revenues"
+      - "Total net sales"
+      - "Net revenue"
+      - "Sales"
+      - "Total sales"
+  cost_of_revenue:
+    canonical: "Cost of Revenue"
+    aliases:
+      - "Cost of sales"
+      - "Cost of goods sold"
+      - "Cost of revenue"
+      - "Cost of net revenues"
+      - "Cost of products sold"
+      - "Cost of revenues"
+  gross_profit:
+    canonical: "Gross Profit"
+    aliases:
+      - "Gross profit"
+      - "Gross margin"
+  research_and_development:
+    canonical: "Research & Development"
+    aliases:
+      - "Research and development"
+      - "Research and development expense"
+      - "R&D expenses"
+  selling_general_admin:
+    canonical: "Selling, General & Administrative"
+    aliases:
+      - "Selling, general and administrative"
+      - "Selling, general and administrative expenses"
+      - "General and administrative"
+      - "General and administrative expenses"
+      - "SG&A"
+      - "Selling and marketing"
+  depreciation_amortization:
+    canonical: "Depreciation & Amortization"
+    aliases:
+      - "Depreciation and amortization"
+      - "Depreciation"
+      - "Amortization"
+      - "Amortization of intangible assets"
+  total_operating_expenses:
+    canonical: "Total Operating Expenses"
+    aliases:
+      - "Total operating expenses"
+      - "Total costs and expenses"
+      - "Total expenses"
+  operating_income:
+    canonical: "Operating Income"
+    aliases:
+      - "Operating income"
+      - "Operating income (loss)"
+      - "Income (loss) from operations"
+      - "Loss from operations"
+      - "Income from operations"
+  interest_expense:
+    canonical: "Interest Expense"
+    aliases:
+      - "Interest expense"
+      - "Interest expense, net"
+      - "Interest and debt expense"
+  interest_income:
+    canonical: "Interest Income"
+    aliases:
+      - "Interest income"
+      - "Interest and other income"
+  other_income_expense:
+    canonical: "Other Income (Expense)"
+    aliases:
+      - "Other income (expense), net"
+      - "Other income, net"
+      - "Other expense, net"
+      - "Other (expense) income"
+      - "Non-operating income (expense)"
+  income_before_tax:
+    canonical: "Income Before Tax"
+    aliases:
+      - "Income before income taxes"
+      - "Income (loss) before income taxes"
+      - "Loss before income taxes"
+      - "Income before provision for income taxes"
+  income_tax_expense:
+    canonical: "Income Tax Expense"
+    aliases:
+      - "Income tax expense"
+      - "Income tax expense (benefit)"
+      - "Provision for income taxes"
+      - "Income tax provision"
+      - "Income taxes"
+  net_income:
+    canonical: "Net Income"
+    aliases:
+      - "Net income"
+      - "Net income (loss)"
+      - "Net loss"
+      - "Net income attributable to common stockholders"
+      - "Net income (loss) attributable to common stockholders"
+  eps_basic:
+    canonical: "EPS - Basic"
+    aliases:
+      - "Basic net income (loss) per share"
+      - "Basic earnings per share"
+      - "Net income (loss) per share, basic"
+      - "Basic net loss per share"
+  eps_diluted:
+    canonical: "EPS - Diluted"
+    aliases:
+      - "Diluted net income (loss) per share"
+      - "Diluted earnings per share"
+      - "Net income (loss) per share, diluted"
+      - "Diluted net loss per share"
+  shares_basic:
+    canonical: "Shares Outstanding - Basic"
+    aliases:
+      - "Weighted average shares outstanding, basic"
+      - "Weighted-average shares outstanding, basic"
+      - "Basic weighted average shares outstanding"
+      - "Weighted average common shares outstanding - basic"
+  shares_diluted:
+    canonical: "Shares Outstanding - Diluted"
+    aliases:
+      - "Weighted average shares outstanding, diluted"
+      - "Weighted-average shares outstanding, diluted"
+      - "Diluted weighted average shares outstanding"
+      - "Weighted average common shares outstanding - diluted"
+
+balance_sheet:
+  cash:
+    canonical: "Cash & Cash Equivalents"
+    aliases:
+      - "Cash and cash equivalents"
+      - "Cash"
+      - "Cash, cash equivalents and restricted cash"
+  short_term_investments:
+    canonical: "Short-Term Investments"
+    aliases:
+      - "Short-term investments"
+      - "Marketable securities"
+      - "Available-for-sale securities"
+  accounts_receivable:
+    canonical: "Accounts Receivable"
+    aliases:
+      - "Accounts receivable, net"
+      - "Accounts receivable"
+      - "Trade receivables"
+      - "Trade accounts receivable"
+      - "Receivables, net"
+  inventory:
+    canonical: "Inventory"
+    aliases:
+      - "Inventories"
+      - "Inventories, net"
+      - "Merchandise inventories"
+  prepaid_expenses:
+    canonical: "Prepaid Expenses"
+    aliases:
+      - "Prepaid expenses and other current assets"
+      - "Prepaid expenses"
+      - "Other current assets"
+  total_current_assets:
+    canonical: "Total Current Assets"
+    aliases:
+      - "Total current assets"
+  property_plant_equipment:
+    canonical: "Property, Plant & Equipment"
+    aliases:
+      - "Property and equipment, net"
+      - "Property, plant and equipment, net"
+      - "Property and equipment"
+  goodwill:
+    canonical: "Goodwill"
+    aliases:
+      - "Goodwill"
+  intangible_assets:
+    canonical: "Intangible Assets"
+    aliases:
+      - "Intangible assets, net"
+      - "Intangible assets"
+      - "Other intangible assets"
+  total_assets:
+    canonical: "Total Assets"
+    aliases:
+      - "Total assets"
+      - "TOTAL ASSETS"
+  accounts_payable:
+    canonical: "Accounts Payable"
+    aliases:
+      - "Accounts payable"
+      - "Trade accounts payable"
+  accrued_liabilities:
+    canonical: "Accrued Liabilities"
+    aliases:
+      - "Accrued liabilities"
+      - "Accrued expenses"
+      - "Accrued expenses and other current liabilities"
+      - "Other accrued liabilities"
+  short_term_debt:
+    canonical: "Short-Term Debt"
+    aliases:
+      - "Short-term borrowings"
+      - "Current portion of long-term debt"
+      - "Current maturities of long-term debt"
+      - "Short-term debt"
+  total_current_liabilities:
+    canonical: "Total Current Liabilities"
+    aliases:
+      - "Total current liabilities"
+  long_term_debt:
+    canonical: "Long-Term Debt"
+    aliases:
+      - "Long-term debt"
+      - "Long-term debt, net of current portion"
+      - "Long-term borrowings"
+      - "Long-term debt, less current portion"
+  total_liabilities:
+    canonical: "Total Liabilities"
+    aliases:
+      - "Total liabilities"
+      - "TOTAL LIABILITIES"
+  common_stock:
+    canonical: "Common Stock"
+    aliases:
+      - "Common stock"
+      - "Common stock and additional paid-in capital"
+  retained_earnings:
+    canonical: "Retained Earnings"
+    aliases:
+      - "Retained earnings"
+      - "Retained earnings (accumulated deficit)"
+      - "Accumulated deficit"
+  total_stockholders_equity:
+    canonical: "Total Stockholders' Equity"
+    aliases:
+      - "Total stockholders' equity"
+      - "Total shareholders' equity"
+      - "Total equity"
+      - "Total stockholders' equity (deficit)"
+  total_liabilities_and_equity:
+    canonical: "Total Liabilities & Stockholders' Equity"
+    aliases:
+      - "Total liabilities and stockholders' equity"
+      - "Total liabilities and shareholders' equity"
+      - "TOTAL LIABILITIES AND STOCKHOLDERS' EQUITY"
+
+cash_flow:
+  net_income_cf:
+    canonical: "Net Income"
+    aliases:
+      - "Net income"
+      - "Net income (loss)"
+      - "Net loss"
+  depreciation_amortization_cf:
+    canonical: "Depreciation & Amortization"
+    aliases:
+      - "Depreciation and amortization"
+      - "Depreciation"
+  stock_based_compensation:
+    canonical: "Stock-Based Compensation"
+    aliases:
+      - "Stock-based compensation"
+      - "Stock-based compensation expense"
+      - "Share-based compensation"
+  changes_in_working_capital:
+    canonical: "Changes in Working Capital"
+    aliases:
+      - "Changes in operating assets and liabilities"
+      - "Changes in assets and liabilities"
+  net_cash_operations:
+    canonical: "Net Cash from Operations"
+    aliases:
+      - "Net cash provided by operating activities"
+      - "Net cash used in operating activities"
+      - "Net cash provided by (used in) operating activities"
+      - "Cash flows from operating activities"
+  capex:
+    canonical: "Capital Expenditures"
+    aliases:
+      - "Purchases of property and equipment"
+      - "Capital expenditures"
+      - "Additions to property and equipment"
+      - "Payments for property and equipment"
+  acquisitions:
+    canonical: "Acquisitions"
+    aliases:
+      - "Acquisitions, net of cash acquired"
+      - "Business acquisitions"
+      - "Payments for acquisitions"
+  net_cash_investing:
+    canonical: "Net Cash from Investing"
+    aliases:
+      - "Net cash provided by investing activities"
+      - "Net cash used in investing activities"
+      - "Net cash provided by (used in) investing activities"
+      - "Cash flows from investing activities"
+  debt_issued:
+    canonical: "Debt Issued"
+    aliases:
+      - "Proceeds from borrowings"
+      - "Proceeds from issuance of debt"
+      - "Proceeds from long-term debt"
+  debt_repaid:
+    canonical: "Debt Repaid"
+    aliases:
+      - "Repayments of debt"
+      - "Repayments of borrowings"
+      - "Repayment of long-term debt"
+  dividends_paid:
+    canonical: "Dividends Paid"
+    aliases:
+      - "Dividends paid"
+      - "Payment of dividends"
+      - "Cash dividends paid"
+  share_repurchases:
+    canonical: "Share Repurchases"
+    aliases:
+      - "Repurchases of common stock"
+      - "Treasury stock acquired"
+      - "Share repurchases"
+      - "Stock repurchases"
+  net_cash_financing:
+    canonical: "Net Cash from Financing"
+    aliases:
+      - "Net cash provided by financing activities"
+      - "Net cash used in financing activities"
+      - "Net cash provided by (used in) financing activities"
+      - "Cash flows from financing activities"
+  net_change_in_cash:
+    canonical: "Net Change in Cash"
+    aliases:
+      - "Net increase (decrease) in cash"
+      - "Net increase in cash"
+      - "Net decrease in cash"
+      - "Net change in cash and cash equivalents"
+      - "Net increase (decrease) in cash, cash equivalents and restricted cash"
+  beginning_cash:
+    canonical: "Beginning Cash"
+    aliases:
+      - "Cash at beginning of period"
+      - "Cash, cash equivalents and restricted cash, beginning of period"
+      - "Cash and cash equivalents, beginning of period"
+  ending_cash:
+    canonical: "Ending Cash"
+    aliases:
+      - "Cash at end of period"
+      - "Cash, cash equivalents and restricted cash, end of period"
+      - "Cash and cash equivalents, end of period"

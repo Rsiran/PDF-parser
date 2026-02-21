@@ -4,14 +4,41 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .pipeline import process_pdf
+from .consistency import enforce_consistent_mappings
+from .pipeline import ProcessingResult, process_pdf
 
 load_dotenv()
+
+
+def _update_filing_sequence(path: Path, seq: int) -> None:
+    """Insert or update ``filing_sequence`` in the YAML front-matter of *path*."""
+    text = path.read_text(encoding="utf-8")
+
+    # Check if filing_sequence already exists in front-matter
+    if re.search(r"^filing_sequence:", text, re.MULTILINE):
+        text = re.sub(
+            r"^filing_sequence:.*$",
+            f"filing_sequence: {seq}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    else:
+        # Insert before the closing --- of front-matter
+        text = re.sub(
+            r"^(---\n(?:.*\n)*?)(---\n)",
+            rf"\g<1>filing_sequence: {seq}\n\2",
+            text,
+            count=1,
+        )
+
+    path.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
@@ -64,18 +91,31 @@ def main() -> None:
 
     print(f"Found {len(pdfs)} PDF(s) in {args.input_folder}", file=sys.stderr)
 
-    successes: list[Path] = []
+    successes: list[ProcessingResult] = []
     failures: list[tuple[Path, str]] = []
 
     for i, pdf_path in enumerate(pdfs, 1):
         print(f"\n[{i}/{len(pdfs)}] {pdf_path.name}", file=sys.stderr)
         try:
-            out = process_pdf(pdf_path, output_dir, verbose=args.verbose)
-            successes.append(out)
-            print(f"  -> {out}", file=sys.stderr)
+            result = process_pdf(pdf_path, output_dir, verbose=args.verbose)
+            successes.append(result)
+            print(f"  -> {result.output_path}", file=sys.stderr)
         except Exception as e:
             failures.append((pdf_path, str(e)))
             print(f"  FAILED: {e}", file=sys.stderr)
+
+    # Multi-filing post-processing
+    if len(successes) > 1:
+        # Enforce consistent normalization mappings across filings
+        all_mappings = [r.mappings for r in successes]
+        consistent = enforce_consistent_mappings(all_mappings)
+        for result, updated_mapping in zip(successes, consistent):
+            result.mappings = updated_mapping
+
+        # Assign filing_sequence based on period_end (oldest = 1)
+        successes.sort(key=lambda r: r.metadata.get("period_end", ""))
+        for i, result in enumerate(successes, 1):
+            _update_filing_sequence(result.output_path, i)
 
     # Summary
     print(f"\n{'='*60}", file=sys.stderr)

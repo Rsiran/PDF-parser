@@ -10,8 +10,11 @@ from collections import Counter
 # Cover Page
 # ---------------------------------------------------------------------------
 
-def parse_cover_page(text: str) -> str:
-    """Extract cover page metadata via regex and return a markdown table."""
+def extract_cover_fields(text: str) -> list[tuple[str, str]]:
+    """Extract cover page metadata fields via regex.
+
+    Returns a list of (label, value) tuples with all detected fields.
+    """
     fields: list[tuple[str, str]] = []
 
     # Filing type
@@ -73,6 +76,13 @@ def parse_cover_page(text: str) -> str:
     if m:
         exchange = m.group(1).strip().rstrip(".")
         fields.append(("Exchange", exchange))
+
+    return fields
+
+
+def parse_cover_page(text: str) -> str:
+    """Extract cover page metadata via regex and return a markdown table."""
+    fields = extract_cover_fields(text)
 
     if not fields:
         return text  # fallback — return raw text if nothing matched
@@ -260,13 +270,14 @@ def _render_markdown_table(
     header_rows: list[list[str]],
     data_rows: list[list[str]],
     col_count: int,
+    left_cols: int = 1,
 ) -> str:
     """Render rows as a markdown table with proper alignment."""
     if col_count < 2:
         col_count = 2
 
-    # Alignment: first column left-aligned, rest right-aligned
-    sep = [":---"] + ["---:"] * (col_count - 1)
+    # Alignment: first left_cols columns left-aligned, rest right-aligned
+    sep = [":---"] * left_cols + ["---:"] * (col_count - left_cols)
 
     lines: list[str] = []
 
@@ -294,13 +305,20 @@ def _render_markdown_table(
     return "\n".join(lines)
 
 
-def tables_to_markdown(section_text: str, tables: list[list[list[str]]]) -> str:
+def tables_to_markdown(
+    section_text: str,
+    tables: list[list[list[str]]],
+    taxonomy: dict | None = None,
+    normalized_data_out: list | None = None,
+) -> str:
     """Convert pdfplumber tables into clean markdown.
 
     - Collapses sparse rows (merging currency symbols and parenthetical negatives)
     - Detects column headers from section text
     - Merges multi-page table fragments with same column count
     - Renders aligned markdown tables with proper headers
+    - When taxonomy is provided, normalizes line items and adds a Canonical column
+    - When normalized_data_out is provided (a list), appends normalized rows to it
     """
     if not tables:
         return section_text  # no tables, return raw text
@@ -402,7 +420,21 @@ def tables_to_markdown(section_text: str, tables: list[list[list[str]]]) -> str:
                 header_rows = [first_row]
                 all_data_rows = table[1:]
 
-        md = _render_markdown_table(header_rows, all_data_rows, col_count)
+        # Normalize line items when taxonomy is provided
+        left_cols = 1
+        if taxonomy is not None:
+            from .normalize import normalize_table_rows
+
+            all_data_rows = normalize_table_rows(all_data_rows, taxonomy)
+            if normalized_data_out is not None:
+                normalized_data_out.extend(all_data_rows)
+            col_count += 1
+            left_cols = 2
+            # Insert "Canonical" header at index 1 in header rows
+            for hi, hrow in enumerate(header_rows):
+                header_rows[hi] = [hrow[0], "Canonical"] + hrow[1:]
+
+        md = _render_markdown_table(header_rows, all_data_rows, col_count, left_cols=left_cols)
         parts.append(md)
 
     return "\n\n".join(parts)
