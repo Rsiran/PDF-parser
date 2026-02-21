@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import pytest
 from pathlib import Path
 
 CADELER_REPORTS = Path(
-    "/Users/jonas/Library/CloudStorage/OneDrive-Personal"
-    "/Desktop/Investering/Cadeler/Reports"
+    os.environ.get(
+        "CADELER_REPORTS_DIR",
+        "/Users/jonas/Library/CloudStorage/OneDrive-Personal"
+        "/Desktop/Investering/Cadeler/Reports",
+    )
 )
 
 

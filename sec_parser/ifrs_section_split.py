@@ -25,7 +25,7 @@ IFRS_SECTION_TITLES = {
 
 # Patterns ordered by typical appearance in IFRS reports.
 # "Condensed" and "Interim" prefixes are optional (quarterly reports use them).
-_PREFIX = r"(?:(?:Interim\s+)?(?:Condensed\s+)?(?:Consolidated\s+)?)?"
+_PREFIX = r"(?:(?:Interim\s+)?(?:Condensed\s+)?(?:Consolidated\s+)?)"
 
 IFRS_SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (

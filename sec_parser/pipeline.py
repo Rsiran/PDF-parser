@@ -16,7 +16,7 @@ from .ifrs_section_split import (
     IFRS_SECTION_TITLES,
     split_ifrs_sections,
 )
-from .programmatic import clean_prose, parse_cover_page, tables_to_markdown
+from .programmatic import _clean_prose_lines, clean_prose, parse_cover_page, process_mixed_section, tables_to_markdown
 from .markdown_writer import (
     IFRS_REQUIRED_SECTIONS,
     IFRS_SECTION_ORDER,
@@ -50,7 +50,8 @@ IFRS_FINANCIAL_STATEMENTS = [
 ]
 
 FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY]
-PROSE_SECTIONS = [MDA, MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
+MIXED_SECTIONS = [MDA]  # sections with interleaved prose + tables
+PROSE_SECTIONS = [MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
 PASSTHROUGH_SECTIONS = [EXHIBITS, SIGNATURES]
 
 
@@ -67,7 +68,7 @@ def _process_ifrs(
         found = [IFRS_SECTION_TITLES.get(k, k) for k in sections]
         print(f"  Sections found: {', '.join(found)}", file=sys.stderr)
 
-    required = [IFRS_INCOME_STATEMENT, IFRS_BALANCE_SHEET, IFRS_CASH_FLOW, IFRS_NOTES]
+    required = [IFRS_INCOME_STATEMENT, IFRS_BALANCE_SHEET, IFRS_CASH_FLOW, IFRS_EQUITY_CHANGES, IFRS_NOTES]
     for key in required:
         if key not in sections:
             print(
@@ -170,7 +171,16 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
             section = sections[key]
             if verbose:
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
-            processed[key] = tables_to_markdown(section.text, section.tables)
+            processed[key] = tables_to_markdown(section.text, section.tables, section_name=key)
+
+    # Mixed sections (prose + tables) — e.g. MD&A
+    for key in MIXED_SECTIONS:
+        if key in sections:
+            sec = sections[key]
+            if verbose:
+                print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
+            sec_pages = [p for p in pages if sec.start_page <= p.page_number <= sec.end_page]
+            processed[key] = process_mixed_section(sec_pages, section_name=key)
 
     # Notes — keep LLM (only remaining API call)
     if NOTES in sections:
@@ -180,10 +190,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
             processed[NOTES] = extract_notes(sections[NOTES].text, verbose=verbose)
         except Exception as exc:
             print(
-                f"  WARNING: Notes extraction failed ({exc}), using raw text",
+                f"  WARNING: Notes extraction failed ({exc}), using mixed processing",
                 file=sys.stderr,
             )
-            processed[NOTES] = sections[NOTES].text
+            sec = sections[NOTES]
+            sec_pages = [p for p in pages if sec.start_page <= p.page_number <= sec.end_page]
+            processed[NOTES] = process_mixed_section(sec_pages, section_name=NOTES)
 
     # Prose sections — programmatic cleanup (no LLM)
     for key in PROSE_SECTIONS:
@@ -193,10 +205,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
             processed[key] = clean_prose(section.text, section.tables)
 
-    # Passthrough sections (raw text, no LLM)
+    # Passthrough sections (light cleanup, no LLM)
     for key in PASSTHROUGH_SECTIONS:
         if key in sections:
-            processed[key] = sections[key].text
+            processed[key] = _clean_prose_lines(sections[key].text)
 
     # Assemble and write output
     md_content = assemble_markdown(pdf_path.name, processed)

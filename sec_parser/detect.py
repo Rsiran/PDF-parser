@@ -27,19 +27,19 @@ _IFRS_PATTERNS = [
 def detect_report_type(pages: list[PageData], scan_pages: int = 10) -> str:
     """Scan the first N pages and return 'sec' or 'ifrs'.
 
-    Scores each marker found. SEC markers get +1 for SEC, IFRS markers +1
-    for IFRS. The higher score wins. Defaults to 'ifrs' on a tie.
+    Scores each unique pattern matched (not per-page occurrence).
+    The higher score wins. Defaults to 'sec' for backward compatibility.
     """
-    sec_score = 0
-    ifrs_score = 0
+    sec_matched: set[int] = set()
+    ifrs_matched: set[int] = set()
 
     for page in pages[:scan_pages]:
         text = page.text
-        for pat in _SEC_PATTERNS:
+        for i, pat in enumerate(_SEC_PATTERNS):
             if pat.search(text):
-                sec_score += 1
-        for pat in _IFRS_PATTERNS:
+                sec_matched.add(i)
+        for i, pat in enumerate(_IFRS_PATTERNS):
             if pat.search(text):
-                ifrs_score += 1
+                ifrs_matched.add(i)
 
-    return "sec" if sec_score > ifrs_score else "ifrs"
+    return "ifrs" if len(ifrs_matched) > len(sec_matched) else "sec"
