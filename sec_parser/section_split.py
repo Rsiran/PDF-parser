@@ -154,6 +154,7 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
     - ≤120 characters long
     - The match starts within the first 10 characters of the line
     - The line does NOT end with a bare page number (TOC entry heuristic)
+    - After the match, the remaining text on the line is short (not prose)
     """
     # Find the line containing the match
     line_start = page_text.rfind("\n", 0, match.start())
@@ -169,12 +170,30 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
         return False
     if _TOC_LINE_NUMBER.search(line):
         return False
+    # Reject lines where the pattern is followed by significant trailing prose
+    # (e.g. "Notes to Financial Statements included in Item 8 of this...")
+    trailing = page_text[match.end():line_end].strip()
+    if len(trailing) > 30:
+        return False
     return True
 
 
+def _has_toc_entries(text: str) -> bool:
+    """Check if the page has multiple lines ending with page numbers (TOC entries)."""
+    toc_entry_count = sum(1 for line in text.split("\n")
+                         if _TOC_LINE_NUMBER.search(line))
+    return toc_entry_count >= 3
+
+
 def _is_toc_page(page: PageData) -> bool:
-    """Detect Table of Contents pages — these list section names with page numbers."""
-    if _TOC_PATTERN.search(page.text):
+    """Detect Table of Contents pages — these list section names with page numbers.
+
+    Distinguishes actual TOC pages from pages with a running header like
+    "Table of Contents Alphabet Inc." or a standalone "TABLE OF CONTENTS"
+    repeated on every page. A real TOC page must also contain multiple
+    lines ending with page numbers (the hallmark of a TOC listing).
+    """
+    if _TOC_PATTERN.search(page.text) and _has_toc_entries(page.text):
         return True
     # Heuristic: if 4+ section patterns match on a single page, it's likely a TOC
     matches = sum(1 for _, pat in SECTION_PATTERNS if pat.search(page.text))
@@ -281,12 +300,26 @@ def split_sections(pages: list[PageData]) -> dict[str, SectionData]:
     if cover:
         sections[COVER_PAGE] = cover
 
+    # Financial statement sections rarely exceed a few pages each.
+    # Cap them to avoid absorbing unrelated trailing content.
+    _MAX_PAGES: dict[str, int] = {
+        INCOME_STATEMENT: 5,
+        BALANCE_SHEET: 5,
+        CASH_FLOW: 5,
+        STOCKHOLDERS_EQUITY: 5,
+    }
+
     for i, (key, start_pg) in enumerate(starts):
         # End page is one before the next section start, or the last page.
         if i + 1 < len(starts):
             end_pg = max(start_pg, starts[i + 1][1] - 1)
         else:
             end_pg = last_page
+
+        # Cap financial statement sections to avoid absorbing unrelated pages
+        max_pg = _MAX_PAGES.get(key)
+        if max_pg and end_pg - start_pg >= max_pg:
+            end_pg = start_pg + max_pg - 1
 
         # Determine if we need to split text on the start/end pages
         next_key = starts[i + 1][0] if i + 1 < len(starts) else None

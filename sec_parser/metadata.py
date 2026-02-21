@@ -113,7 +113,8 @@ def extract_metadata(
     return {
         "company": lookup.get("Company", ""),
         "ticker": lookup.get("Ticker", ""),
-        "cik": lookup.get("CIK", "") or lookup.get("Commission File Number", ""),
+        "cik": lookup.get("CIK", ""),
+        "commission_file_number": lookup.get("Commission File Number", ""),
         "filing_type": filing_type,
         "period_end": period_end,
         "period_type": period_type,
