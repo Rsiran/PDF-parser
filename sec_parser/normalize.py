@@ -45,12 +45,15 @@ def _build_alias_index(taxonomy: dict) -> dict[str, str]:
     return index
 
 
-def match_line_item(label: str, taxonomy: dict) -> NormResult:
+def match_line_item(
+    label: str, taxonomy: dict, alias_index: dict[str, str] | None = None,
+) -> NormResult:
     """Match a label to a canonical name using exact then fuzzy matching."""
     if not label or not label.strip():
         return NormResult(None, 0.0, "none")
 
-    alias_index = _build_alias_index(taxonomy)
+    if alias_index is None:
+        alias_index = _build_alias_index(taxonomy)
     label_lower = label.strip().lower()
 
     # Exact match
@@ -78,13 +81,14 @@ def normalize_table_rows(
     """Add 'Canonical' column at index 1 to each row."""
     from .programmatic import _is_numeric
 
+    alias_index = _build_alias_index(taxonomy)
     result = []
     for row in rows:
         first_cell = row[0] if row else ""
         if not first_cell.strip() or _is_numeric(first_cell):
             canonical = ""
         else:
-            match = match_line_item(first_cell, taxonomy)
+            match = match_line_item(first_cell, taxonomy, alias_index=alias_index)
             canonical = match.canonical if match.canonical else ""
         new_row = [row[0], canonical] + row[1:]
         result.append(new_row)

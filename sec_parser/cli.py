@@ -10,6 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .consistency import enforce_consistent_mappings
 from .pipeline import ProcessingResult, process_pdf
 
 load_dotenv()
@@ -103,8 +104,15 @@ def main() -> None:
             failures.append((pdf_path, str(e)))
             print(f"  FAILED: {e}", file=sys.stderr)
 
-    # Assign filing_sequence based on period_end (oldest = 1)
+    # Multi-filing post-processing
     if len(successes) > 1:
+        # Enforce consistent normalization mappings across filings
+        all_mappings = [r.mappings for r in successes]
+        consistent = enforce_consistent_mappings(all_mappings)
+        for result, updated_mapping in zip(successes, consistent):
+            result.mappings = updated_mapping
+
+        # Assign filing_sequence based on period_end (oldest = 1)
         successes.sort(key=lambda r: r.metadata.get("period_end", ""))
         for i, result in enumerate(successes, 1):
             _update_filing_sequence(result.output_path, i)
