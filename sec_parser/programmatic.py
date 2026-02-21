@@ -110,6 +110,52 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         exchange = m.group(1).strip().rstrip(".")
         fields.append(("Exchange", exchange))
 
+    # --- Fallbacks for press releases / non-standard covers ---
+
+    labels = {label for label, _ in fields}
+
+    # Fallback company name: "The Xyz Company today reported..."
+    # or first line of text if it looks like a company name
+    if "Company" not in labels:
+        # Pattern: "(EXCHANGE: TICKER)" often preceded by company name
+        m = re.search(
+            r"([A-Z][\w\s&.,'-]+?)\s*\((?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\)",
+            text,
+        )
+        if m:
+            fields.append(("Company", m.group(1).strip().rstrip(",")))
+            if "Ticker" not in labels:
+                fields.append(("Ticker", m.group(2).strip()))
+                ticker_found = True
+        else:
+            # Pattern: "The Xyz Company today reported/announced..."
+            m = re.search(
+                r"((?:The\s+)?[A-Z][\w\s&.,'-]+?(?:Company|Inc\.|Corp(?:oration)?\.?|Ltd\.?|N\.V\.|plc|Group|LP))\s+today\s+(?:reported|announced)",
+                text,
+            )
+            if m:
+                fields.append(("Company", m.group(1).strip().rstrip(",")))
+
+    # Fallback ticker: "NYSE: KO" or "NASDAQ: NBIS" anywhere in text
+    if "Ticker" not in labels and not ticker_found:
+        m = re.search(
+            r"(?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\b",
+            text,
+        )
+        if m and m.group(1) not in ("THE", "LLC", "INC", "NYSE", "EACH", "NAME"):
+            fields.append(("Ticker", m.group(1).strip()))
+
+    # Fallback period: "ended December 31, 2025" or
+    # "quarter and full year 2025 results" / "full-year 2025 financial results"
+    if "Period" not in labels:
+        m = re.search(
+            r"ended\s+(\w+\s+\d{1,2},?\s+\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            fields.append(("Period", m.group(1).strip()))
+
     return fields
 
 
@@ -203,6 +249,79 @@ def collapse_row(row: list[str]) -> list[str]:
             i += 1
 
     return merged
+
+
+# Numeric value token in financial tables (for splitting single-column rows)
+_VALUE_TOKEN = re.compile(
+    r"(?:\$\s*)?"           # optional dollar sign
+    r"(?:"
+    r"\([\d,]+\.?\d*\)"     # parenthetical negative like (13,756)
+    r"|[\d,]+\.?\d*"        # regular number like 130,497 or 2.94
+    r"|[—–]"                # em-dash, en-dash
+    r")"
+    r"%?"                   # optional percent
+)
+
+# Date fragments that should not be treated as values
+_DATE_FRAG = re.compile(
+    r"(?:January|February|March|April|May|June|July|August|September|October|November|December|"
+    r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}",
+    re.IGNORECASE,
+)
+
+
+def split_single_col_row(text: str) -> list[str]:
+    """Split a single-column table row into [label, val1, val2, ...].
+
+    pdfplumber sometimes returns financial tables as single-column data
+    where all values are concatenated into one string, e.g.:
+        'Revenue $ 130,497 $ 60,922 $ 26,974'
+    This function splits it into:
+        ['Revenue', '$ 130,497', '$ 60,922', '$ 26,974']
+
+    Handles date fragments in labels (e.g. "Jan 30, 2022") by masking them
+    so they are not mistakenly treated as numeric values.
+    """
+    text = text.strip()
+    if not text:
+        return [text]
+
+    # Mask date fragments so they're not treated as values
+    date_spans = [(m.start(), m.end()) for m in _DATE_FRAG.finditer(text)]
+
+    # Find all value matches, skipping those inside date fragments
+    values = []
+    for m in _VALUE_TOKEN.finditer(text):
+        in_date = any(ds <= m.start() < de for ds, de in date_spans)
+        if not in_date:
+            values.append(m)
+
+    if not values:
+        return [text]
+
+    # Walk backwards from end to find contiguous trailing values
+    val_spans: list[tuple[int, int, str]] = []
+    for m in reversed(values):
+        end_of_interest = len(text) if not val_spans else val_spans[-1][0]
+        between = text[m.end():end_of_interest].strip()
+        if not between:
+            val_spans.append((m.start(), m.end(), m.group().strip()))
+        else:
+            break
+
+    if not val_spans:
+        return [text]
+
+    val_spans.reverse()
+    split_pos = val_spans[0][0]
+    label = text[:split_pos].strip()
+    vals = [v[2] for v in val_spans]
+
+    if not label and vals:
+        return vals
+    if label:
+        return [label] + vals
+    return [text]
 
 
 def _extract_column_headers(text: str) -> tuple[list[str], list[str]]:
@@ -403,6 +522,15 @@ def tables_to_markdown(
 
     if not collapsed_tables:
         return section_text
+
+    # Split single-column rows into multi-column data.
+    # pdfplumber often returns financial tables as 1-column rows where all
+    # values are concatenated (e.g. "Revenue $ 130,497 $ 60,922 $ 26,974").
+    for ti, table in enumerate(collapsed_tables):
+        lengths = Counter(len(r) for r in table)
+        dominant_len = lengths.most_common(1)[0][0]
+        if dominant_len <= 1:
+            collapsed_tables[ti] = [split_single_col_row(r[0] if r else "") for r in table]
 
     # Fix 5A: Strip mid-table repeated headers (date/period rows, scale indicators)
     _mid_header_re = re.compile(

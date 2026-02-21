@@ -235,15 +235,31 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
 
     # Search for scale hint in financial statement text
     scale_hint: str | None = None
+    _SCALE_PATTERNS = [
+        # Parenthesized: "(in thousands, except per share data)"
+        re.compile(
+            r"\(in\s+(?:\w+\s+)?(?:thousands|millions|billions)[^)]*\)",
+            re.IGNORECASE,
+        ),
+        # Unparenthesized: "In USD $ millions" or "in millions"
+        re.compile(
+            r"\bin\s+(?:(?:USD|U\.S\.\s*dollars?|CAD|EUR)\s*\$?\s*)?(?:thousands|millions|billions)\b",
+            re.IGNORECASE,
+        ),
+        # Tabular: "(Amounts in millions)" or "amounts in thousands"
+        re.compile(
+            r"(?:amounts?|tabular\s+amounts?)\s+in\s+(?:thousands|millions|billions)",
+            re.IGNORECASE,
+        ),
+    ]
     for key in FINANCIAL_STATEMENTS:
         if key in sections:
-            m = re.search(
-                r"\(in\s+(?:\w+\s+)?(?:thousands|millions|billions)[^)]*\)",
-                sections[key].text,
-                re.IGNORECASE,
-            )
-            if m:
-                scale_hint = m.group(0)
+            for pat in _SCALE_PATTERNS:
+                m = pat.search(sections[key].text)
+                if m:
+                    scale_hint = m.group(0)
+                    break
+            if scale_hint:
                 break
 
     metadata = extract_metadata(
