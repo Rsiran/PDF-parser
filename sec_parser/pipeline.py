@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .gemini_client import extract_notes
@@ -31,6 +32,14 @@ from .section_split import (
     split_sections,
 )
 
+@dataclass
+class ProcessingResult:
+    """Result of processing a single PDF filing."""
+    output_path: Path
+    mappings: dict[str, str] = field(default_factory=dict)  # label -> canonical
+    metadata: dict = field(default_factory=dict)
+
+
 FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY]
 PROSE_SECTIONS = [MDA, MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
 PASSTHROUGH_SECTIONS = [EXHIBITS, SIGNATURES]
@@ -43,10 +52,10 @@ STATEMENT_TYPE_MAP = {
 }
 
 
-def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path:
+def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> ProcessingResult:
     """Process a single SEC filing PDF into a structured markdown file.
 
-    Returns the path to the output markdown file.
+    Returns a ProcessingResult with the output path, label mappings, and metadata.
     Raises RuntimeError for scanned PDFs or other unrecoverable errors.
     """
     if verbose:
@@ -164,6 +173,16 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
         if verbose and results:
             print(f"  Validation: {len(results)} checks run", file=sys.stderr)
 
+    # Collect label -> canonical mappings from normalized rows
+    mappings: dict[str, str] = {}
+    for rows in normalized_rows.values():
+        for row in rows:
+            if len(row) >= 2:
+                label = row[0].strip()
+                canonical = row[1].strip()
+                if label and canonical:
+                    mappings[label] = canonical
+
     # Assemble and write output
     md_content = assemble_markdown(
         pdf_path.name, processed, metadata=metadata,
@@ -175,4 +194,8 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
     if verbose:
         print(f"  Written to {output_path}", file=sys.stderr)
 
-    return output_path
+    return ProcessingResult(
+        output_path=output_path,
+        mappings=mappings,
+        metadata=metadata,
+    )
