@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 from .gemini_client import extract_notes
-from .programmatic import clean_prose, parse_cover_page, tables_to_markdown
+from .metadata import extract_metadata
+from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, tables_to_markdown
 from .markdown_writer import assemble_markdown, write_markdown
 from .pdf_extract import detect_scanned, extract_pdf
 from .section_split import (
@@ -104,8 +106,32 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
         if key in sections:
             processed[key] = sections[key].text
 
+    # Extract metadata from cover page fields
+    cover_fields: list[tuple[str, str]] = []
+    if COVER_PAGE in sections:
+        cover_fields = extract_cover_fields(sections[COVER_PAGE].text)
+
+    # Search for scale hint in financial statement text
+    scale_hint: str | None = None
+    for key in FINANCIAL_STATEMENTS:
+        if key in sections:
+            m = re.search(
+                r"\(in\s+(?:thousands|millions|billions)[^)]*\)",
+                sections[key].text,
+                re.IGNORECASE,
+            )
+            if m:
+                scale_hint = m.group(0)
+                break
+
+    metadata = extract_metadata(
+        cover_fields=cover_fields,
+        scale_hint=scale_hint,
+        source_pdf=pdf_path.name,
+    )
+
     # Assemble and write output
-    md_content = assemble_markdown(pdf_path.name, processed)
+    md_content = assemble_markdown(pdf_path.name, processed, metadata=metadata)
     output_path = output_dir / f"{pdf_path.stem}.md"
     write_markdown(output_path, md_content)
 
