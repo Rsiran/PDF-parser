@@ -51,7 +51,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         BALANCE_SHEET,
         re.compile(
-            r"(?:CONDENSED\s+)?CONSOLIDATED\s+BALANCE\s+SHEETS?",
+            r"(?:CONDENSED\s+)?CONSOLIDATED\s+(?:BALANCE\s+SHEETS?|STATEMENTS?\s+OF\s+FINANCIAL\s+CONDITION)",
             re.IGNORECASE,
         ),
     ),
@@ -74,7 +74,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         NOTES,
         re.compile(
-            r"NOTES\s+TO\s+(?:THE\s+)?(?:CONDENSED\s+)?(?:CONSOLIDATED\s+)?(?:CONDENSED\s+)?FINANCIAL\s+STATEMENTS",
+            r"NOTES\s+TO\s+(?:THE\s+)?(?:CONDENSED\s+)?(?:CONSOLIDATED\s+)?(?:CONDENSED\s+)?(?:INTERIM\s+)?FINANCIAL\s+STATEMENTS",
             re.IGNORECASE,
         ),
     ),
@@ -143,6 +143,34 @@ _TOC_PATTERN = re.compile(
     r"TABLE\s+OF\s+CONTENTS", re.IGNORECASE
 )
 
+# Matches a trailing bare page number at end of a line (TOC entry)
+_TOC_LINE_NUMBER = re.compile(r"\s+\d{1,3}\s*$")
+
+
+def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
+    """Check that a regex match falls on a standalone heading line.
+
+    A valid heading line must be:
+    - ≤120 characters long
+    - The match starts within the first 10 characters of the line
+    - The line does NOT end with a bare page number (TOC entry heuristic)
+    """
+    # Find the line containing the match
+    line_start = page_text.rfind("\n", 0, match.start())
+    line_start = 0 if line_start == -1 else line_start + 1
+    line_end = page_text.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(page_text)
+    line = page_text[line_start:line_end]
+
+    if len(line) > 120:
+        return False
+    if match.start() - line_start > 10:
+        return False
+    if _TOC_LINE_NUMBER.search(line):
+        return False
+    return True
+
 
 def _is_toc_page(page: PageData) -> bool:
     """Detect Table of Contents pages — these list section names with page numbers."""
@@ -164,9 +192,11 @@ def _find_section_starts(pages: list[PageData]) -> list[tuple[str, int]]:
         for key, pattern in SECTION_PATTERNS:
             if key in seen_keys:
                 continue
-            if pattern.search(page.text):
-                found.append((key, page.page_number))
-                seen_keys.add(key)
+            for m in pattern.finditer(page.text):
+                if _is_heading_match(page.text, m):
+                    found.append((key, page.page_number))
+                    seen_keys.add(key)
+                    break
 
     # Sort by page number so boundary logic works correctly
     found.sort(key=lambda x: x[1])
