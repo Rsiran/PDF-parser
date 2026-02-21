@@ -425,12 +425,6 @@ def tables_to_markdown(
             cleaned.append(row)
         collapsed_tables[ti] = cleaned
 
-    # Fix 5B: Label anonymous subtotal rows (single numeric cell, no label)
-    for table in collapsed_tables:
-        for ri, row in enumerate(table):
-            if len(row) == 1 and _is_numeric(row[0]) and row[0].strip() not in ("—", "-", "–", ""):
-                table[ri] = ["Total", row[0]]
-
     # If tables lack meaningful row labels (e.g. IFRS PDFs where pdfplumber
     # captures numbers but labels are only in the text), fall back to section text.
     total_rows = 0
@@ -446,6 +440,12 @@ def tables_to_markdown(
                     labeled_rows += 1
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
         return section_text
+
+    # Fix 5B: Label anonymous subtotal rows (single numeric cell, no label)
+    for table in collapsed_tables:
+        for ri, row in enumerate(table):
+            if len(row) == 1 and _is_numeric(row[0]) and row[0].strip() not in ("—", "-", "–", ""):
+                table[ri] = ["Total", row[0]]
 
     # Try to merge tables with matching column counts (multi-page continuations)
     merged: list[list[list[str]]] = []
