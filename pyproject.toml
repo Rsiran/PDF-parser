@@ -5,13 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sec-parser"
 version = "0.1.0"
-description = "Batch-process SEC 10-K and 10-Q financial PDFs into structured markdown"
+description = "Batch-process financial report PDFs (SEC and IFRS) into structured markdown"
 requires-python = ">=3.10"
 dependencies = [
     "pdfplumber>=0.11",
     "google-genai>=1.0",
     "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 sec-parse = "sec_parser.cli:main"

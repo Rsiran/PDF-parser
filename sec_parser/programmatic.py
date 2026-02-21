@@ -360,6 +360,22 @@ def tables_to_markdown(
     if not collapsed_tables:
         return section_text
 
+    # If tables lack meaningful row labels (e.g. IFRS PDFs where pdfplumber
+    # captures numbers but labels are only in the text), fall back to section text.
+    total_rows = 0
+    labeled_rows = 0
+    for table in collapsed_tables:
+        for row in table:
+            if not row:
+                continue
+            total_rows += 1
+            first = row[0].strip()
+            if first and not _is_numeric(first) and len(first) > 3:
+                if not re.match(r"^(?:Q\d|FY)?\s*\d{4}$", first):
+                    labeled_rows += 1
+    if total_rows > 0 and labeled_rows / total_rows < 0.2:
+        return section_text
+
     # Try to merge tables with matching column counts (multi-page continuations)
     merged: list[list[list[str]]] = []
     for table in collapsed_tables:

@@ -44,12 +44,12 @@ def _update_filing_sequence(path: Path, seq: int) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="sec-parse",
-        description="Batch-process SEC 10-K and 10-Q financial PDFs into structured markdown.",
+        description="Batch-process financial report PDFs (SEC 10-K/10-Q and IFRS) into structured markdown.",
     )
     parser.add_argument(
         "input_folder",
         type=Path,
-        help="Folder containing SEC filing PDFs",
+        help="Folder containing financial report PDFs",
     )
     parser.add_argument(
         "-o",
