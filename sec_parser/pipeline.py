@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .detect import detect_report_type
@@ -16,7 +18,10 @@ from .ifrs_section_split import (
     IFRS_SECTION_TITLES,
     split_ifrs_sections,
 )
-from .programmatic import _clean_prose_lines, clean_prose, parse_cover_page, process_mixed_section, tables_to_markdown
+from .metadata import extract_metadata
+from .normalize import load_taxonomy
+from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, tables_to_markdown
+from .validate import extract_statement_data, render_validation_markdown, run_all_checks
 from .markdown_writer import (
     IFRS_REQUIRED_SECTIONS,
     IFRS_SECTION_ORDER,
@@ -42,6 +47,14 @@ from .section_split import (
     split_sections,
 )
 
+@dataclass
+class ProcessingResult:
+    """Result of processing a single PDF filing."""
+    output_path: Path
+    mappings: dict[str, str] = field(default_factory=dict)  # label -> canonical
+    metadata: dict = field(default_factory=dict)
+
+
 IFRS_FINANCIAL_STATEMENTS = [
     IFRS_INCOME_STATEMENT,
     IFRS_BALANCE_SHEET,
@@ -50,9 +63,15 @@ IFRS_FINANCIAL_STATEMENTS = [
 ]
 
 FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY]
-MIXED_SECTIONS = [MDA]  # sections with interleaved prose + tables
-PROSE_SECTIONS = [MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
+PROSE_SECTIONS = [MDA, MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
 PASSTHROUGH_SECTIONS = [EXHIBITS, SIGNATURES]
+
+# Map section keys to validation statement types
+STATEMENT_TYPE_MAP = {
+    INCOME_STATEMENT: "income_statement",
+    BALANCE_SHEET: "balance_sheet",
+    CASH_FLOW: "cash_flow",
+}
 
 
 def _process_ifrs(
@@ -60,7 +79,7 @@ def _process_ifrs(
     pdf_path: Path,
     output_dir: Path,
     verbose: bool,
-) -> Path:
+) -> ProcessingResult:
     """Process an IFRS report PDF into markdown."""
     sections = split_ifrs_sections(pages)
 
@@ -115,14 +134,14 @@ def _process_ifrs(
     if verbose:
         print(f"  Written to {output_path}", file=sys.stderr)
 
-    return output_path
+    return ProcessingResult(output_path=output_path)
 
 
-def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path:
+def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> ProcessingResult:
     """Process a financial report PDF into a structured markdown file.
 
     Auto-detects SEC vs IFRS report type.
-    Returns the path to the output markdown file.
+    Returns a ProcessingResult with the output path, label mappings, and metadata.
     Raises RuntimeError for scanned PDFs or other unrecoverable errors.
     """
     if verbose:
@@ -141,7 +160,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
     if report_type == "ifrs":
         return _process_ifrs(pages, pdf_path, output_dir, verbose)
 
-    # === SEC pipeline (existing logic, unchanged) ===
+    # === SEC pipeline ===
     sections = split_sections(pages)
 
     if verbose:
@@ -159,28 +178,29 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
 
     processed: dict[str, str] = {}
 
+    # Load taxonomy for line-item normalization
+    taxonomy = load_taxonomy()
+
     # Cover page — programmatic regex extraction
     if COVER_PAGE in sections:
         if verbose:
             print(f"  Processing {SECTION_TITLES[COVER_PAGE]}...", file=sys.stderr)
         processed[COVER_PAGE] = parse_cover_page(sections[COVER_PAGE].text)
 
-    # Financial statements — programmatic table collapse (no LLM)
+    # Financial statements — programmatic table collapse with normalization
+    normalized_rows: dict[str, list[list[str]]] = {}
     for key in FINANCIAL_STATEMENTS:
         if key in sections:
             section = sections[key]
             if verbose:
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
-            processed[key] = tables_to_markdown(section.text, section.tables, section_name=key)
-
-    # Mixed sections (prose + tables) — e.g. MD&A
-    for key in MIXED_SECTIONS:
-        if key in sections:
-            sec = sections[key]
-            if verbose:
-                print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
-            sec_pages = [p for p in pages if sec.start_page <= p.page_number <= sec.end_page]
-            processed[key] = process_mixed_section(sec_pages, section_name=key)
+            rows_out: list[list[str]] = []
+            processed[key] = tables_to_markdown(
+                section.text, section.tables,
+                taxonomy=taxonomy, normalized_data_out=rows_out,
+            )
+            if key in STATEMENT_TYPE_MAP:
+                normalized_rows[key] = rows_out
 
     # Notes — keep LLM (only remaining API call)
     if NOTES in sections:
@@ -190,12 +210,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
             processed[NOTES] = extract_notes(sections[NOTES].text, verbose=verbose)
         except Exception as exc:
             print(
-                f"  WARNING: Notes extraction failed ({exc}), using mixed processing",
+                f"  WARNING: Notes extraction failed ({exc}), using raw text",
                 file=sys.stderr,
             )
-            sec = sections[NOTES]
-            sec_pages = [p for p in pages if sec.start_page <= p.page_number <= sec.end_page]
-            processed[NOTES] = process_mixed_section(sec_pages, section_name=NOTES)
+            processed[NOTES] = sections[NOTES].text
 
     # Prose sections — programmatic cleanup (no LLM)
     for key in PROSE_SECTIONS:
@@ -205,17 +223,73 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Path
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
             processed[key] = clean_prose(section.text, section.tables)
 
-    # Passthrough sections (light cleanup, no LLM)
+    # Passthrough sections (raw text, no LLM)
     for key in PASSTHROUGH_SECTIONS:
         if key in sections:
-            processed[key] = _clean_prose_lines(sections[key].text)
+            processed[key] = sections[key].text
+
+    # Extract metadata from cover page fields
+    cover_fields: list[tuple[str, str]] = []
+    if COVER_PAGE in sections:
+        cover_fields = extract_cover_fields(sections[COVER_PAGE].text)
+
+    # Search for scale hint in financial statement text
+    scale_hint: str | None = None
+    for key in FINANCIAL_STATEMENTS:
+        if key in sections:
+            m = re.search(
+                r"\(in\s+(?:thousands|millions|billions)[^)]*\)",
+                sections[key].text,
+                re.IGNORECASE,
+            )
+            if m:
+                scale_hint = m.group(0)
+                break
+
+    metadata = extract_metadata(
+        cover_fields=cover_fields,
+        scale_hint=scale_hint,
+        source_pdf=pdf_path.name,
+    )
+
+    # Run validation checks on normalized financial data
+    statements: dict[str, dict[str, list[float]]] = {}
+    for key, stmt_type in STATEMENT_TYPE_MAP.items():
+        if key in normalized_rows:
+            stmt_data = extract_statement_data(normalized_rows[key])
+            if stmt_data:
+                statements[stmt_type] = stmt_data
+
+    validation_md = ""
+    if statements:
+        results = run_all_checks(statements)
+        validation_md = render_validation_markdown(results)
+        if verbose and results:
+            print(f"  Validation: {len(results)} checks run", file=sys.stderr)
+
+    # Collect label -> canonical mappings from normalized rows
+    mappings: dict[str, str] = {}
+    for rows in normalized_rows.values():
+        for row in rows:
+            if len(row) >= 2:
+                label = row[0].strip()
+                canonical = row[1].strip()
+                if label and canonical:
+                    mappings[label] = canonical
 
     # Assemble and write output
-    md_content = assemble_markdown(pdf_path.name, processed)
+    md_content = assemble_markdown(
+        pdf_path.name, processed, metadata=metadata,
+        validation_markdown=validation_md,
+    )
     output_path = output_dir / f"{pdf_path.stem}.md"
     write_markdown(output_path, md_content)
 
     if verbose:
         print(f"  Written to {output_path}", file=sys.stderr)
 
-    return output_path
+    return ProcessingResult(
+        output_path=output_path,
+        mappings=mappings,
+        metadata=metadata,
+    )

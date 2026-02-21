@@ -12,6 +12,7 @@ from .ifrs_section_split import (
     IFRS_NOTES,
     IFRS_SECTION_TITLES,
 )
+from .metadata import metadata_to_yaml
 from .section_split import (
     BALANCE_SHEET,
     CASH_FLOW,
@@ -74,6 +75,8 @@ def assemble_markdown(
     section_order: list[str] | None = None,
     section_titles: dict[str, str] | None = None,
     required_sections: set[str] | None = None,
+    metadata: dict | None = None,
+    validation_markdown: str = "",
 ) -> str:
     """Build the final markdown string from processed section content.
 
@@ -83,6 +86,8 @@ def assemble_markdown(
         section_order: Optional override for section ordering.
         section_titles: Optional override for section display titles.
         required_sections: Optional override for required sections set.
+        metadata: Optional metadata dict to render as YAML front-matter.
+        validation_markdown: Optional validation results rendered as markdown.
 
     Returns:
         Complete markdown document as a string.
@@ -92,6 +97,8 @@ def assemble_markdown(
     required = required_sections or REQUIRED_SECTIONS
 
     parts: list[str] = []
+    if metadata:
+        parts.append(metadata_to_yaml(metadata))
     parts.append(f"# {Path(source_filename).stem}\n")
 
     for key in order:
@@ -111,6 +118,11 @@ def assemble_markdown(
         parts.append(f"## {title}\n")
         parts.append(content)
         parts.append("")  # blank line between sections
+
+    if validation_markdown:
+        parts.append("## Validation\n")
+        parts.append(validation_markdown)
+        parts.append("")
 
     return "\n".join(parts) + "\n"
 
