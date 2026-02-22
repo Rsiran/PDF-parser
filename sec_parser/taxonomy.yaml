@@ -176,6 +176,17 @@ balance_sheet:
     canonical: "Total Current Assets"
     aliases:
       - "Total current assets"
+  total_non_current_assets:
+    canonical: "Total Non-Current Assets"
+    aliases:
+      - "Total non-current assets"
+      - "Total noncurrent assets"
+  other_non_current_assets:
+    canonical: "Other Non-Current Assets"
+    aliases:
+      - "Other non-current assets"
+      - "Other noncurrent assets"
+      - "Other assets"
   property_plant_equipment:
     canonical: "Property, Plant & Equipment"
     aliases:
@@ -220,6 +231,12 @@ balance_sheet:
     canonical: "Total Current Liabilities"
     aliases:
       - "Total current liabilities"
+  total_non_current_liabilities:
+    canonical: "Total Non-Current Liabilities"
+    aliases:
+      - "Total non-current liabilities"
+      - "Total noncurrent liabilities"
+      - "Other liabilities"
   long_term_debt:
     canonical: "Long-Term Debt"
     aliases:
