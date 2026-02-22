@@ -119,6 +119,38 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         exchange = m.group(1).strip().rstrip(".")
         fields.append(("Exchange", exchange))
 
+    # State of Incorporation — "(State or other jurisdiction of incorporation...)"
+    m = re.search(
+        r"^(.+)\n\s*\((?:State|state)\s+or\s+other\s+jurisdiction\s+of\s+incorporat",
+        text,
+        re.MULTILINE,
+    )
+    if m:
+        state = m.group(1).strip()
+        if len(state) < 60:
+            fields.append(("State of Incorporation", state))
+
+    # Address — "(Address of principal executive offices...)"
+    m = re.search(
+        r"^(.+)\n\s*\((?:Address|address)\s+of\s+principal\s+executive\s+offic",
+        text,
+        re.MULTILINE,
+    )
+    if m:
+        address = m.group(1).strip()
+        if len(address) < 120:
+            fields.append(("Address", address))
+
+    # Phone — pattern like "(xxx) xxx-xxxx" or "xxx-xxx-xxxx" near
+    # "Registrant's telephone number"
+    m = re.search(
+        r"(?:telephone\s+number|phone)[^)]*?(\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4})",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        fields.append(("Phone", m.group(1).strip()))
+
     # --- Fallbacks for press releases / non-standard covers ---
 
     labels = {label for label, _ in fields}
@@ -635,24 +667,27 @@ def tables_to_markdown(
     # Strip Note reference columns (small integers between label and financial data)
     collapsed_tables = _strip_note_ref_columns(collapsed_tables)
 
-    # Fix 5A: Strip mid-table repeated headers (date/period rows, scale indicators)
-    _mid_header_re = re.compile(
-        r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
-        r"\s+\d{1,2}",
+    # Fix 5A: Strip mid-table repeated headers (scale indicators only;
+    # date rows are preserved — they may be column headers or data rows
+    # like "Cash, beginning of period  January 26, 2025").
+    _scale_re = re.compile(r"^\(?\s*in\s+(?:thousands|millions|billions)", re.IGNORECASE)
+    _date_only_re = re.compile(
+        r"^(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{1,2},?\s*(?:\d{4})?\s*$",
         re.IGNORECASE,
     )
-    _scale_re = re.compile(r"^\(?\s*in\s+(?:thousands|millions|billions)", re.IGNORECASE)
     for ti, table in enumerate(collapsed_tables):
         cleaned: list[list[str]] = []
-        for row in table:
+        for ri, row in enumerate(table):
             non_empty = [c for c in row if c.strip()]
             if non_empty and all(not _is_numeric(c) for c in non_empty):
-                # All non-numeric — check if it's a repeated date/scale header
                 joined = " ".join(non_empty)
-                if _mid_header_re.search(joined) and len(non_empty) <= 3:
-                    continue  # skip repeated date header
                 if _scale_re.match(joined):
                     continue  # skip scale indicator
+                # Only strip date-only rows that appear mid-table (not first row)
+                # and where every non-empty cell is just a date fragment
+                if ri > 0 and all(_date_only_re.match(c.strip()) for c in non_empty):
+                    continue  # skip repeated mid-table date header
             cleaned.append(row)
         collapsed_tables[ti] = cleaned
 
@@ -803,8 +838,14 @@ def clean_prose(section_text: str, tables: list[list[list[str]]] | None = None) 
     - Fixes broken line breaks (mid-sentence splits)
     - Adds markdown headings for Item headers
     - Detects sub-headings (short title-case lines)
-    - Converts embedded tables to markdown
+    - Renders embedded tables as markdown tables
     """
+    # Render any pdfplumber tables as markdown and append after prose cleanup
+    table_md = ""
+    if tables:
+        rendered = tables_to_markdown(section_text, tables)
+        if "|" in rendered:
+            table_md = rendered
     lines = section_text.splitlines()
 
     # Remove standalone page numbers
@@ -899,4 +940,10 @@ def clean_prose(section_text: str, tables: list[list[list[str]]] | None = None) 
     # Clean up excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
 
-    return text.strip()
+    result = text.strip()
+
+    # Append rendered tables if present
+    if table_md:
+        result = result + "\n\n" + table_md
+
+    return result
