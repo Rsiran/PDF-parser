@@ -146,6 +146,13 @@ balance_sheet:
       - "Restricted cash"
       - "Restricted cash, current"
       - "Restricted cash and cash equivalents"
+  long_term_investments:
+    canonical: "Long-Term Investments"
+    aliases:
+      - "Long-term marketable securities"
+      - "Non-current marketable securities"
+      - "Marketable securities (non-current)"
+      - "Long-term investments"
   short_term_investments:
     canonical: "Short-Term Investments"
     aliases:
@@ -227,16 +234,27 @@ balance_sheet:
       - "Current portion of long-term debt"
       - "Current maturities of long-term debt"
       - "Short-term debt"
+  other_current_liabilities:
+    canonical: "Other Current Liabilities"
+    aliases:
+      - "Other current liabilities"
+      - "Other accrued liabilities (current)"
+      - "Accrued and other current liabilities"
   total_current_liabilities:
     canonical: "Total Current Liabilities"
     aliases:
       - "Total current liabilities"
+  other_non_current_liabilities:
+    canonical: "Other Non-Current Liabilities"
+    aliases:
+      - "Other non-current liabilities"
+      - "Other long-term liabilities"
+      - "Other liabilities (non-current)"
   total_non_current_liabilities:
     canonical: "Total Non-Current Liabilities"
     aliases:
       - "Total non-current liabilities"
       - "Total noncurrent liabilities"
-      - "Other liabilities"
   long_term_debt:
     canonical: "Long-Term Debt"
     aliases:

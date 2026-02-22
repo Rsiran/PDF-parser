@@ -855,22 +855,14 @@ def process_notes_fallback(
     section_text: str,
     tables: list[list[list[str]]],
 ) -> str:
-    """Process Notes section without LLM — clean prose and render tables inline.
+    """Process Notes section without LLM — clean prose only.
 
-    Unlike financial statements, Notes tables don't use taxonomy normalization.
-    Each table uses its own first-row headers (handled by tables_to_markdown with
-    the per-table header priority from Fix 1B).
+    When Gemini is unavailable, the raw text already contains table data inline.
+    Appending pdfplumber tables would duplicate content (the same data appears
+    both as raw text and as fragmented pdfplumber tables). So we just clean the
+    prose and return it — no table rendering.
     """
-    # Start with prose cleanup to get ### headings, then append rendered tables
-    prose = clean_prose(section_text)
-    if not tables:
-        return prose
-
-    table_md = tables_to_markdown(section_text, tables)
-    # If tables were rendered, append them after the prose
-    if "|" in table_md:
-        return prose + "\n\n" + table_md
-    return prose
+    return clean_prose(section_text)
 
 
 # ---------------------------------------------------------------------------
