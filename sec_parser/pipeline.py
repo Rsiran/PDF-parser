@@ -20,7 +20,7 @@ from .ifrs_section_split import (
 )
 from .metadata import extract_metadata
 from .normalize import load_taxonomy
-from .programmatic import clean_prose, extract_cover_fields, parse_cover_page, process_notes_fallback, tables_to_markdown
+from .programmatic import clean_prose, extract_cover_fields, format_exhibits, parse_cover_page, process_notes_fallback, tables_to_markdown
 from .validate import extract_statement_data, render_validation_markdown, run_all_checks
 from .markdown_writer import (
     IFRS_REQUIRED_SECTIONS,
@@ -226,7 +226,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
     # Passthrough sections (light cleanup, no LLM)
     for key in PASSTHROUGH_SECTIONS:
         if key in sections:
-            processed[key] = clean_prose(sections[key].text)
+            if key == EXHIBITS:
+                processed[key] = format_exhibits(sections[key].text)
+            else:
+                processed[key] = clean_prose(sections[key].text)
 
     # Extract metadata from cover page fields
     cover_fields: list[tuple[str, str]] = []

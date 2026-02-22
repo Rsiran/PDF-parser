@@ -106,7 +106,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         LEGAL_PROCEEDINGS,
         re.compile(
-            r"Item\s+1[.\s]+LEGAL\s+PROCEEDINGS",
+            r"Item\s+(?:1|3)[.\s]+LEGAL\s+PROCEEDINGS",
             re.IGNORECASE,
         ),
     ),
@@ -120,7 +120,7 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         EXHIBITS,
         re.compile(
-            r"Item\s+6[.\s]+EXHIBITS",
+            r"Item\s+(?:6|15|16)[.\s]+EXHIBITS",
             re.IGNORECASE,
         ),
     ),

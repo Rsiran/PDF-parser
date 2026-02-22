@@ -214,6 +214,47 @@ def parse_cover_page(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Exhibits formatting
+# ---------------------------------------------------------------------------
+
+_EXHIBIT_NUM_RE = re.compile(
+    r"^(\d{1,3}(?:\.\d{1,3})?(?:\.\w+)?)\s",
+)
+
+
+def format_exhibits(section_text: str) -> str:
+    """Format an Exhibits section as a structured markdown list.
+
+    Detects exhibit entries (lines starting with patterns like "31.1", "32",
+    "101.INS") and converts them to markdown list items. Falls back to
+    clean_prose() if no exhibit patterns are found.
+    """
+    lines = section_text.splitlines()
+    result: list[str] = []
+    exhibit_count = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            result.append("")
+            continue
+        if re.match(r"^\s*\d{1,3}\s*$", stripped):
+            continue
+        if _EXHIBIT_NUM_RE.match(stripped):
+            result.append(f"- {stripped}")
+            exhibit_count += 1
+        else:
+            result.append(stripped)
+
+    if exhibit_count < 2:
+        return clean_prose(section_text)
+
+    text = "\n".join(result)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
 # Table helpers
 # ---------------------------------------------------------------------------
 
@@ -700,10 +741,13 @@ def tables_to_markdown(
             if not row:
                 continue
             total_rows += 1
-            first = row[0].strip()
-            if first and not _is_numeric(first) and len(first) > 3:
-                if not re.match(r"^(?:Q\d|FY)?\s*\d{4}$", first):
-                    labeled_rows += 1
+            # Check first two columns for labels (some tables have note refs in col 0)
+            for col_idx in range(min(2, len(row))):
+                cell = row[col_idx].strip()
+                if cell and not _is_numeric(cell) and len(cell) > 3:
+                    if not re.match(r"^(?:Q\d|FY)?\s*\d{4}$", cell):
+                        labeled_rows += 1
+                        break
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
         return section_text
 
@@ -775,6 +819,9 @@ def tables_to_markdown(
             # Table has its own headers (e.g. Level 1/2/3, As Reported/Adjusted)
             header_rows = [first_row]
             all_data_rows = table[1:]
+            # Use header row to set column count if it has more columns
+            if len(first_row) > col_count:
+                col_count = len(first_row)
         else:
             # Build header rows from detected text headers (periods/years)
             header_rows = _build_header_rows(period_headers, year_columns, col_count)

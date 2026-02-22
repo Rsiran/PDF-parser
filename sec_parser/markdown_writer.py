@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .ifrs_section_split import (
@@ -116,6 +117,12 @@ def assemble_markdown(
 
         title = titles[key]
         parts.append(f"## {title}\n")
+        # Strip duplicate section heading from content
+        title_pattern = re.compile(
+            r"^\s*#{0,4}\s*" + re.escape(title) + r"\s*\n*",
+            re.IGNORECASE,
+        )
+        content = title_pattern.sub("", content, count=1).lstrip("\n")
         parts.append(content)
         parts.append("")  # blank line between sections
 
