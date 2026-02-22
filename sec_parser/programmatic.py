@@ -333,6 +333,149 @@ def collapse_row(row: list[str]) -> list[str]:
     return merged
 
 
+def _collapse_table_positional(table: list[list[str]]) -> list[list[str]]:
+    """Collapse a table with position-aware alignment for wide sparse tables.
+
+    Normal tables (< 10 raw columns) use standard collapse_row().
+    Wide sparse tables (≥ 10 raw columns, e.g. stockholders' equity) get
+    position-aware handling: a column map is built from the fullest rows,
+    and each row's values are placed into the correct logical column based
+    on their raw cell positions.
+
+    This prevents sparse rows like SBC (which only populate APIC and Total
+    columns) from being left-shifted by collapse_row()'s empty-cell stripping.
+    """
+    if not table:
+        return []
+
+    max_raw_cols = max(len(row) for row in table)
+    if max_raw_cols < 10:
+        # Normal table — standard collapse
+        return [collapse_row(row) for row in table]
+
+    # --- Wide sparse table: position-aware collapse ---
+
+    # Step 1: Find which raw cell positions hold data across all rows.
+    # Build a "column map": list of raw indices that are value columns.
+    # We look at the rows with the MOST non-empty cells (typically "Balance" rows).
+    row_fill_counts = []
+    for ri, row in enumerate(table):
+        non_empty = sum(1 for c in row if (c or "").strip())
+        row_fill_counts.append((non_empty, ri))
+    row_fill_counts.sort(reverse=True)
+
+    # Use the top ~3 fullest rows to determine the column positions
+    ref_positions: set[int] = set()
+    for _, ri in row_fill_counts[:3]:
+        row = table[ri]
+        # After collapsing currency symbols ($+value), identify which raw
+        # positions are "anchor" positions (where values land)
+        i = 0
+        while i < len(row):
+            cell = (row[i] or "").strip()
+            if cell in ("$", "€", "£"):
+                # Currency symbol — the anchor position is the symbol position
+                ref_positions.add(i)
+                # Skip past the value cell
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                i = j + 1 if j < len(row) else i + 1
+            elif cell:
+                ref_positions.add(i)
+                i += 1
+            else:
+                i += 1
+
+    if not ref_positions:
+        return [collapse_row(row) for row in table]
+
+    # Sort into a column map: ordered list of raw positions → logical column indices
+    col_map = sorted(ref_positions)
+    num_cols = len(col_map)
+
+    if num_cols < 3:
+        # Too few columns detected — fall back to standard collapse
+        return [collapse_row(row) for row in table]
+
+    # Step 2: For each row, place values into logical columns
+    result: list[list[str]] = []
+    for row in table:
+        # First, do the standard currency/paren merging per-cell
+        # but track which raw position each merged value came from
+        merged_with_pos: list[tuple[int, str]] = []
+        i = 0
+        while i < len(row):
+            cell = (row[i] or "").strip()
+            if cell in ("$", "€", "£"):
+                anchor = i
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                if j < len(row):
+                    next_val = (row[j] or "").strip()
+                    if next_val.startswith("(") and not next_val.endswith(")"):
+                        k = j + 1
+                        while k < len(row) and not (row[k] or "").strip():
+                            k += 1
+                        if k < len(row) and (row[k] or "").strip() == ")":
+                            merged_with_pos.append((anchor, f"{cell} {next_val})"))
+                            i = k + 1
+                            continue
+                    merged_with_pos.append((anchor, f"{cell} {next_val}"))
+                    i = j + 1
+                else:
+                    merged_with_pos.append((anchor, cell))
+                    i += 1
+            elif cell.startswith("(") and not cell.endswith(")") and re.match(r"^\([\d,]+\.?\d*$", cell):
+                anchor = i
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                if j < len(row) and (row[j] or "").strip() == ")":
+                    merged_with_pos.append((anchor, f"{cell})"))
+                    i = j + 1
+                else:
+                    merged_with_pos.append((anchor, cell))
+                    i += 1
+            elif cell == "%" and merged_with_pos:
+                prev_pos, prev_val = merged_with_pos[-1]
+                merged_with_pos[-1] = (prev_pos, prev_val + "%")
+                i += 1
+            elif cell == ")":
+                i += 1
+            elif cell:
+                merged_with_pos.append((i, cell))
+                i += 1
+            else:
+                i += 1
+
+        if not merged_with_pos:
+            continue
+
+        # Map each value to its nearest logical column
+        out_row = [""] * num_cols
+        used: set[int] = set()
+        for raw_pos, val in merged_with_pos:
+            # Find the closest column map position
+            best_col = min(range(num_cols), key=lambda c: abs(col_map[c] - raw_pos))
+            # If already used, try adjacent
+            if best_col in used:
+                for offset in range(1, num_cols):
+                    if best_col + offset < num_cols and best_col + offset not in used:
+                        best_col = best_col + offset
+                        break
+                    if best_col - offset >= 0 and best_col - offset not in used:
+                        best_col = best_col - offset
+                        break
+            out_row[best_col] = val
+            used.add(best_col)
+
+        result.append(out_row)
+
+    return result
+
+
 # Numeric value token in financial tables (for splitting single-column rows)
 _VALUE_TOKEN = re.compile(
     r"(?:\$\s*)?"           # optional dollar sign
@@ -684,10 +827,11 @@ def tables_to_markdown(
     if not filtered_tables:
         return section_text
 
-    # Collapse all rows
+    # Collapse all rows, with position-aware handling for wide sparse tables
+    # (e.g. stockholders' equity) where column alignment matters.
     collapsed_tables: list[list[list[str]]] = []
     for table in filtered_tables:
-        collapsed = [collapse_row(row) for row in table]
+        collapsed = _collapse_table_positional(table)
         # Filter out completely empty rows
         collapsed = [r for r in collapsed if any(c.strip() for c in r)]
         if collapsed:

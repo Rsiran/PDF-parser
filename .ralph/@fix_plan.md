@@ -8,7 +8,7 @@
 
 ### Phase 2: Core Table & Section Fixes
 - [x] US-003: Eliminate duplicate notes in raw-text fallback (suppress pdfplumber tables when raw-text already covers those pages)
-- [ ] US-004: Fix stockholders' equity column alignment for sparse rows (pad collapsed rows to match dominant column count)
+- [x] US-004: Fix stockholders' equity column alignment for sparse rows (pad collapsed rows to match dominant column count)
 - [ ] US-005: Capture cash flow beginning balance row for AAPL
 - [ ] US-006: Detect Comprehensive Income as separate section (add comprehensive_income to SECTION_PATTERNS)
 
