@@ -17,7 +17,7 @@ from .prompts import (
 )
 
 DEFAULT_MODEL = "gemini-2.5-flash"
-CHUNK_CHAR_LIMIT = 150_000
+CHUNK_CHAR_LIMIT = 100_000
 
 
 def _get_client() -> genai.Client:
@@ -72,9 +72,14 @@ def _chunk_notes(text: str, limit: int = CHUNK_CHAR_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text]
 
-    # Split at "Note <number>" boundaries
-    pattern = re.compile(r"(?=\bNote\s+\d+)", re.IGNORECASE)
+    # Split at "Note <number>" or "NOTE <number>" or "## Note" boundaries
+    pattern = re.compile(r"(?=\n\s*(?:Note|NOTE)\s+\d+[\s.:\-—])", re.IGNORECASE)
     parts = pattern.split(text)
+
+    if len(parts) <= 1:
+        # Fallback: split at any heading-like boundary
+        pattern = re.compile(r"(?=\n\s*#{1,3}\s+)")
+        parts = pattern.split(text)
 
     # Re-assemble into chunks that stay under the limit
     chunks: list[str] = []
@@ -117,7 +122,7 @@ def extract_notes(notes_text: str, verbose: bool = False) -> str:
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction="You are a financial document processor.",
-                max_output_tokens=16000,
+                max_output_tokens=65536,
             ),
         )
         parts = []

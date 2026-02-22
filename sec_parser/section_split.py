@@ -44,7 +44,8 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         INCOME_STATEMENT,
         re.compile(
-            r"(?:CONDENSED\s+)?CONSOLIDATED\s+STATEMENTS?\s+OF\s+(?:INCOME|OPERATIONS|EARNINGS)",
+            r"(?:CONDENSED\s+)?CONSOLIDATED\s+STATEMENTS?\s+OF\s+(?:INCOME|OPERATIONS|EARNINGS)"
+            r"(?:\s+AND\s+COMPREHENSIVE\s+(?:INCOME|LOSS)(?:\s*\(LOSS\))?)?",
             re.IGNORECASE,
         ),
     ),
@@ -66,8 +67,10 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         STOCKHOLDERS_EQUITY,
         re.compile(
             r"(?:CONDENSED\s+)?CONSOLIDATED\s+STATEMENTS?\s+OF\s+"
-            r"(?:STOCKHOLDERS|SHAREHOLDERS|CHANGES\s+IN\s+(?:STOCKHOLDERS|SHAREHOLDERS))['\u2019]?\s*"
-            r"(?:EQUITY|DEFICIT)",
+            r"(?:"
+            r"(?:STOCKHOLDERS|SHAREHOLDERS|CHANGES\s+IN\s+(?:STOCKHOLDERS|SHAREHOLDERS))['\u2019]?\s*(?:EQUITY|DEFICIT)"
+            r"|CHANGES\s+IN\s+EQUITY"
+            r")",
             re.IGNORECASE,
         ),
     ),
@@ -81,7 +84,8 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         MDA,
         re.compile(
-            r"(?:Item\s+2[.\s]*)?MANAGEMENT['\u2019]?S\s+DISCUSSION\s+AND\s+ANALYSIS",
+            r"(?:Item\s+(?:2|7)[.\s]*)?MANAGEMENT['\u2019]?S\s+DISCUSSION\s+AND\s+ANALYSIS"
+            r"(?:\s+OF\s+FINANCIAL\s+CONDITION\s+AND\s+RESULTS\s+OF\s+OPERATIONS)?",
             re.IGNORECASE,
         ),
     ),
@@ -173,7 +177,7 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
     # Reject lines where the pattern is followed by significant trailing prose
     # (e.g. "Notes to Financial Statements included in Item 8 of this...")
     trailing = page_text[match.end():line_end].strip()
-    if len(trailing) > 30:
+    if len(trailing) > 50:
         return False
     return True
 
@@ -186,17 +190,57 @@ def _has_toc_entries(text: str) -> bool:
 
 
 def _is_toc_page(page: PageData) -> bool:
-    """Detect Table of Contents pages — these list section names with page numbers.
+    """Detect Table of Contents pages — these list section names with page numbers."""
+    text = page.text
+    has_toc_heading = bool(_TOC_PATTERN.search(text))
 
-    Distinguishes actual TOC pages from pages with a running header like
-    "Table of Contents Alphabet Inc." or a standalone "TABLE OF CONTENTS"
-    repeated on every page. A real TOC page must also contain multiple
-    lines ending with page numbers (the hallmark of a TOC listing).
-    """
-    if _TOC_PATTERN.search(page.text) and _has_toc_entries(page.text):
+    if has_toc_heading and _has_toc_entries(text):
+        # Check if "TABLE OF CONTENTS" is a running header vs a real TOC heading.
+        # Running headers appear on the first few lines of many pages (e.g. XOM
+        # has "Table of Contents Financial Table of Contents" on every page).
+        lines = text.strip().splitlines()
+        toc_in_header_area = any(
+            _TOC_PATTERN.search(line) and len(line.strip()) < 60
+            for line in lines[:3]
+        )
+
+        # Check if the page has financial data patterns
+        financial_patterns = re.compile(
+            r"(?:total\s+(?:assets|liabilities|revenue|equity|current)|"
+            r"net\s+(?:income|loss|cash)|"
+            r"operating\s+(?:income|loss|expenses)|"
+            r"stockholders|shareholders|"
+            r"\$\s*[\d,]+)",
+            re.IGNORECASE,
+        )
+        has_financial = financial_patterns.search(text)
+
+        if toc_in_header_area and has_financial:
+            # TOC text is in the header area BUT page has financial data —
+            # this is a financial page with a running TOC header, not a real TOC
+            return False
+
+        if not toc_in_header_area and has_financial:
+            # TOC text is buried in the page (not a heading) and page has
+            # financial data — not a TOC page
+            return False
+
+        # Check for dotted-leader TOC entry pattern (real TOC pages typically
+        # have entries like "Item 1. Business .............. 5")
+        dotted_leader = re.compile(r"\.{3,}\s*\d{1,3}\s*$")
+        dotted_count = sum(1 for line in lines if dotted_leader.search(line))
+        if dotted_count >= 2:
+            return True  # definite TOC page with dotted leaders
+
+        # If TOC is in header area but no financial data, it's a real TOC
+        if toc_in_header_area:
+            return True
+
+        # TOC text not in header, no financial data — likely a real TOC
         return True
+
     # Heuristic: if 4+ section patterns match on a single page, it's likely a TOC
-    matches = sum(1 for _, pat in SECTION_PATTERNS if pat.search(page.text))
+    matches = sum(1 for _, pat in SECTION_PATTERNS if pat.search(text))
     return matches >= 4
 
 

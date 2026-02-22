@@ -24,7 +24,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
 
     # Company name — line before "(Exact name of registrant ...)"
     m = re.search(
-        r"^(.+)\n\s*\((?:Exact|exact)\s+name\s+of\s+registrant",
+        r"^[ \t]*(.+)\n\s*\((?:Exact|exact)\s+name\s+of\s+(?:R|r)egistrant",
         text,
         re.MULTILINE,
     )
@@ -61,8 +61,11 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
     # Trading Symbol / Ticker
     # SEC 12(b) table format: header line with "Trading Symbol" followed by
     # data lines like "Class A common stock, $0.001 par value ASST The Nasdaq ..."
+    # Match SEC 12(b) table header — handles both single-line
+    # ("Title of Each Class Trading Symbol") and split-line formats
+    # ("Trading\nTitle of each class symbol(s) ...")
     header_match = re.search(
-        r"Title\s+of\s+Each\s+Class\s+Trading\s+Symbol",
+        r"Title\s+of\s+(?:Each|each)\s+(?:Class|class)\s+(?:Trading\s+)?[Ss]ymbol",
         text,
         re.IGNORECASE,
     )
@@ -73,15 +76,21 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         for line in after_header.splitlines()[:10]:
             line_s = line.strip()
             # Skip the header continuation line and empty lines
-            if not line_s or "exchange" in line_s.lower() or "registered" in line_s.lower():
+            # Note: don't skip lines just because they contain "exchange" — data rows
+            # like "Common Stock XOM New York Stock Exchange" are valid ticker sources
+            if not line_s or "registered" in line_s.lower():
+                continue
+            # Skip lines that are purely exchange header continuations
+            if re.match(r"^\s*(?:Name\s+of\s+)?(?:Each\s+)?Exchange", line_s, re.IGNORECASE):
                 continue
             if line_s.lower().startswith("indicate"):
                 break
             # Data line pattern: description ending with "par value [per share]",
-            # "stock", "warrant", etc., then TICKER (2-5 uppercase letters),
+            # "stock", "warrant", etc., then TICKER (1-5 uppercase letters),
             # then exchange name. Also handle "N/A" as no ticker.
+            # Also match "Common Stock, without par value XOM New York..."
             ticker_m = re.search(
-                r"(?:par\s+value(?:\s+per\s+share)?|per\s+share|stock|warrant[s]?|unit[s]?|right[s]?|debenture[s]?|shares)\s+([A-Z]{2,5})\s",
+                r"(?:par\s+value(?:\s+per\s+share)?|per\s+share|stock|warrant[s]?|unit[s]?|right[s]?|debenture[s]?|shares)\s+([A-Z]{1,5})\s",
                 line_s,
             )
             if ticker_m:
@@ -93,12 +102,12 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
     if not ticker_found:
         # Fallback: inline format "Trading Symbol(s): AAPL" or "Trading Symbol(s) AAPL"
         m = re.search(
-            r"Trading\s+Symbol\(?s?\)?[:\s]+([A-Z]{2,5})\b",
+            r"Trading\s+Symbol\(?s?\)?[:\s]+([A-Za-z]{1,5})\b",
             text,
             re.IGNORECASE,
         )
-        if m and m.group(1).upper() not in ("NAME", "THE", "OF", "EACH"):
-            fields.append(("Ticker", m.group(1).strip()))
+        if m and m.group(1).upper() not in ("NAME", "THE", "OF", "EACH", "N", "A"):
+            fields.append(("Ticker", m.group(1).strip().upper()))
 
     # Exchange
     m = re.search(
@@ -465,6 +474,97 @@ def _render_markdown_table(
     return "\n".join(lines)
 
 
+def _strip_note_ref_columns(tables: list[list[list[str]]]) -> list[list[list[str]]]:
+    """Remove Note reference columns from financial tables.
+
+    Some filings include a column of small integers (1-30) or note references
+    like "3", "8, 10", "14" between the line-item name and financial values.
+    After collapse_row(), these appear as cells in some rows but not others
+    (rows without note refs are shorter). Detect and strip them.
+
+    Strategy: for rows longer than the dominant length, check if the extra cell
+    at position 1 is a note ref. If enough rows have this pattern, strip it.
+    """
+    _NOTE_REF = re.compile(r"^\d{1,2}(?:\s*,\s*\d{1,2})*$")
+
+    result = []
+    for table in tables:
+        if not table:
+            result.append(table)
+            continue
+
+        # Find the two most common row lengths (excluding header/label-only rows)
+        data_rows = [r for r in table if len(r) >= 2]
+        if not data_rows:
+            result.append(table)
+            continue
+
+        lengths = Counter(len(r) for r in data_rows)
+        common_lengths = lengths.most_common(2)
+        if len(common_lengths) < 2:
+            # All rows same length — check column 1 directly
+            col_count = common_lengths[0][0]
+            if col_count < 3:
+                result.append(table)
+                continue
+            # Check if column 1 is a note ref column
+            note_cells = []
+            for row in data_rows:
+                cell = row[1].strip() if len(row) > 1 else ""
+                if cell:
+                    note_cells.append(cell)
+            if note_cells:
+                note_count = sum(1 for c in note_cells if _NOTE_REF.match(c))
+                has_financial = any("$" in c or ("," in c and len(c) > 3) for c in note_cells)
+                all_small = all(
+                    _NOTE_REF.match(c) and all(int(x.strip()) <= 30 for x in c.split(","))
+                    for c in note_cells if _NOTE_REF.match(c)
+                )
+                if note_count >= 3 and not has_financial and all_small:
+                    stripped = [[c for i, c in enumerate(row) if i != 1] for row in table]
+                    result.append(stripped)
+                    continue
+            result.append(table)
+            continue
+
+        # Two common lengths — the longer rows likely have a note ref column
+        short_len, long_len = sorted([common_lengths[0][0], common_lengths[1][0]])
+        if long_len - short_len != 1:
+            result.append(table)
+            continue
+
+        # Check: in longer rows, is position 1 a note ref (small int)?
+        note_ref_count = 0
+        long_rows_with_data = 0
+        for row in data_rows:
+            if len(row) == long_len and len(row) >= 2:
+                cell = row[1].strip()
+                if cell:
+                    long_rows_with_data += 1
+                    if _NOTE_REF.match(cell):
+                        # Verify it's a small number
+                        try:
+                            vals = [int(x.strip()) for x in cell.split(",")]
+                            if all(v <= 30 for v in vals):
+                                note_ref_count += 1
+                        except ValueError:
+                            pass
+
+        if long_rows_with_data >= 2 and note_ref_count / long_rows_with_data >= 0.5:
+            # Strip position 1 from longer rows to align with shorter rows
+            stripped = []
+            for row in table:
+                if len(row) == long_len:
+                    stripped.append([row[0]] + row[2:])
+                else:
+                    stripped.append(row)
+            result.append(stripped)
+        else:
+            result.append(table)
+
+    return result
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -531,6 +631,9 @@ def tables_to_markdown(
         dominant_len = lengths.most_common(1)[0][0]
         if dominant_len <= 1:
             collapsed_tables[ti] = [split_single_col_row(r[0] if r else "") for r in table]
+
+    # Strip Note reference columns (small integers between label and financial data)
+    collapsed_tables = _strip_note_ref_columns(collapsed_tables)
 
     # Fix 5A: Strip mid-table repeated headers (date/period rows, scale indicators)
     _mid_header_re = re.compile(
@@ -706,6 +809,19 @@ def clean_prose(section_text: str, tables: list[list[list[str]]] | None = None) 
 
     # Remove standalone page numbers
     lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+
+    # Remove page footer patterns like "Apple Inc. | 2025 Form 10-K | 34"
+    # or "Company Name | Year Form Type | PageNum"
+    _footer_re = re.compile(
+        r"^\s*.{3,50}\s*\|\s*\d{4}\s+Form\s+10-[KQ](?:/A)?\s*\|\s*\d{1,3}\s*$",
+        re.IGNORECASE,
+    )
+    lines = [l for l in lines if not _footer_re.match(l)]
+
+    # Remove "Table of Contents" running headers (standalone or with company suffix)
+    lines = [l for l in lines if not re.match(
+        r"^\s*(?:Financial\s+)?Table\s+of\s+Contents\b.*$", l, re.IGNORECASE
+    )]
 
     # Remove standalone F-N page references
     lines = [l for l in lines if not re.match(r"^\s*F-\d{1,3}\s*$", l)]

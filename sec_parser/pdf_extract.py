@@ -33,6 +33,103 @@ _TEXT_TABLE_SETTINGS = {
 }
 
 
+def _collapse_repeated_chars(text: str) -> str:
+    """Collapse character-tripled/doubled text from bold PDF rendering.
+
+    Some PDFs render bold by overlaying characters 2-3 times. pdfplumber
+    extracts all copies, e.g. "YYYeeeaaarrr" instead of "Year".
+
+    Detection: check if the text has a pattern where each character appears
+    exactly N times consecutively (N=2 or N=3) for a significant portion.
+    Only apply to lines where this pattern is dominant.
+    """
+    lines = text.split('\n')
+    result = []
+    for line in lines:
+        collapsed = _try_collapse_line(line)
+        result.append(collapsed)
+    return '\n'.join(result)
+
+
+def _try_collapse_line(line: str) -> str:
+    """Try to collapse a single line of repeated characters.
+
+    Tries multiple repeat factors (2-15) and picks the best one.
+    Some PDFs overlay glyphs varying numbers of times for bold/emphasis.
+    """
+    if len(line) < 6:
+        return line
+
+    # Try each factor and collect candidates with their match quality
+    best: tuple[float, int, str] | None = None  # (match_ratio, factor, result)
+    for factor in range(2, 16):
+        if len(line) < factor * 3:
+            continue
+        collapsed = _collapse_with_factor(line, factor)
+        if collapsed is not None:
+            # Score by compression ratio — real repeated text compresses a lot
+            ratio = len(collapsed) / len(line)
+            # Prefer higher factors when ratio is similar (more compression = more likely)
+            score = ratio  # lower is better (more compression)
+            if best is None or score < best[0]:
+                best = (score, factor, collapsed)
+
+    if best is not None:
+        return best[2]
+    return line
+
+
+def _collapse_with_factor(line: str, factor: int) -> str | None:
+    """Try to collapse a line assuming each char is repeated `factor` times.
+
+    Returns the collapsed string if successful, None if the pattern doesn't match.
+    """
+    # Check if the line can be evenly divided
+    # Build the collapsed version and verify it matches
+    chars = list(line)
+    if not chars:
+        return None
+
+    collapsed = []
+    i = 0
+    matches = 0
+    total_groups = 0
+
+    while i < len(chars):
+        ch = chars[i]
+        # Count consecutive occurrences of this character
+        j = i
+        while j < len(chars) and chars[j] == ch:
+            j += 1
+        run_length = j - i
+
+        if ch == ' ':
+            # Spaces may not be exactly repeated — be lenient
+            collapsed.append(' ')
+            i = j
+            continue
+
+        total_groups += 1
+        if run_length == factor:
+            matches += 1
+            collapsed.append(ch)
+            i = j
+        elif run_length % factor == 0:
+            # Multiple of factor — might be legitimate repeated chars
+            matches += 1
+            collapsed.append(ch * (run_length // factor))
+            i = j
+        else:
+            # Doesn't match the pattern
+            collapsed.append(ch * run_length)
+            i = j
+
+    # Only accept if a high proportion of character groups match the pattern
+    if total_groups > 0 and matches / total_groups >= 0.7 and total_groups >= 3:
+        return ''.join(collapsed)
+    return None
+
+
 def _clean_tables(raw_tables: list) -> list[list[list[str]]]:
     """Replace None cells with empty strings in raw pdfplumber tables."""
     return [
@@ -52,6 +149,7 @@ def extract_pdf(path: Path) -> list[PageData]:
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
+            text = _collapse_repeated_chars(text)  # Fix character-tripled bold text
             raw_tables = page.extract_tables() or []
             tables = _clean_tables(raw_tables)
 

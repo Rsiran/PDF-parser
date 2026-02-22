@@ -251,6 +251,11 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
             r"(?:amounts?|tabular\s+amounts?)\s+in\s+(?:thousands|millions|billions)",
             re.IGNORECASE,
         ),
+        # Standalone: "(millions of dollars)" or "(thousands of euros)"
+        re.compile(
+            r"\((?:thousands|millions|billions)\s+of\s+(?:dollars|euros|pounds)\)",
+            re.IGNORECASE,
+        ),
     ]
     for key in FINANCIAL_STATEMENTS:
         if key in sections:
@@ -262,10 +267,12 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
             if scale_hint:
                 break
 
+    cover_text = sections[COVER_PAGE].text if COVER_PAGE in sections else ""
     metadata = extract_metadata(
         cover_fields=cover_fields,
         scale_hint=scale_hint,
         source_pdf=pdf_path.name,
+        cover_text=cover_text,
     )
 
     # Run validation checks on normalized financial data
