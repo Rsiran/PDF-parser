@@ -197,7 +197,7 @@ def extract_metadata(
 
     is_10k = filing_type.upper().startswith("10-K") if filing_type else False
 
-    return {
+    meta = {
         "company": lookup.get("Company", ""),
         "ticker": lookup.get("Ticker", ""),
         "cik": lookup.get("CIK", ""),
@@ -212,6 +212,18 @@ def extract_metadata(
         "source_pdf": source_pdf,
         "parsed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+
+    # Optional cover fields — only include when present
+    for label, key in (
+        ("State of Incorporation", "state_of_incorporation"),
+        ("Address", "address"),
+        ("Phone", "phone"),
+    ):
+        val = lookup.get(label, "")
+        if val:
+            meta[key] = val
+
+    return meta
 
 
 def _yaml_value(value: object) -> str:
