@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .detect import detect_report_type
+from .detect import detect_10k_start_page, detect_report_type
 from .gemini_client import extract_notes
 from .ifrs_section_split import (
     IFRS_BALANCE_SHEET,
@@ -32,6 +32,7 @@ from .pdf_extract import detect_scanned, extract_pdf
 from .section_split import (
     BALANCE_SHEET,
     CASH_FLOW,
+    COMPREHENSIVE_INCOME,
     CONTROLS,
     COVER_PAGE,
     EXHIBITS,
@@ -62,7 +63,7 @@ IFRS_FINANCIAL_STATEMENTS = [
     IFRS_EQUITY_CHANGES,
 ]
 
-FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY]
+FINANCIAL_STATEMENTS = [INCOME_STATEMENT, BALANCE_SHEET, CASH_FLOW, STOCKHOLDERS_EQUITY, COMPREHENSIVE_INCOME]
 PROSE_SECTIONS = [MDA, MARKET_RISK, CONTROLS, LEGAL_PROCEEDINGS, RISK_FACTORS]
 PASSTHROUGH_SECTIONS = [EXHIBITS, SIGNATURES]
 
@@ -161,6 +162,14 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
         return _process_ifrs(pages, pdf_path, output_dir, verbose)
 
     # === SEC pipeline ===
+
+    # Detect combined document (annual report + 10-K)
+    tenk_start = detect_10k_start_page(pages)
+    if tenk_start > 1:
+        if verbose:
+            print(f"  Combined document detected: 10-K starts at page {tenk_start}", file=sys.stderr)
+        pages = [p for p in pages if p.page_number >= tenk_start]
+
     sections = split_sections(pages)
 
     if verbose:

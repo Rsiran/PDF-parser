@@ -17,6 +17,7 @@ from .metadata import metadata_to_yaml
 from .section_split import (
     BALANCE_SHEET,
     CASH_FLOW,
+    COMPREHENSIVE_INCOME,
     CONTROLS,
     COVER_PAGE,
     EXHIBITS,
@@ -38,6 +39,7 @@ SECTION_ORDER = [
     INCOME_STATEMENT,
     CASH_FLOW,
     STOCKHOLDERS_EQUITY,
+    COMPREHENSIVE_INCOME,
     NOTES,
     MDA,
     MARKET_RISK,

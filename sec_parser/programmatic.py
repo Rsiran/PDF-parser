@@ -130,16 +130,30 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         if len(state) < 60:
             fields.append(("State of Incorporation", state))
 
-    # Address — "(Address of principal executive offices...)"
+    # Address — multi-line capture above "(Address of principal executive offices...)"
     m = re.search(
-        r"^(.+)\n\s*\((?:Address|address)\s+of\s+principal\s+executive\s+offic",
+        r"\((?:Address|address)\s+of\s+principal\s+executive\s+offic",
         text,
-        re.MULTILINE,
     )
     if m:
-        address = m.group(1).strip()
-        if len(address) < 120:
-            fields.append(("Address", address))
+        # Look at the 1-3 lines before this match
+        before = text[:m.start()]
+        lines_before = [l.strip() for l in before.splitlines() if l.strip()]
+        # Take up to 3 lines before, filtering out non-address content
+        addr_parts = []
+        for line in reversed(lines_before[-3:]):
+            # Stop if we hit something that's not an address line
+            if re.match(r"(?:Commission|File\s+Number|Form\s+10|UNITED\s+STATES|SECURITIES)", line, re.IGNORECASE):
+                break
+            if len(line) > 120:
+                break
+            if re.match(r"^\(", line):  # another parenthetical descriptor
+                break
+            addr_parts.insert(0, line)
+        if addr_parts:
+            address = ", ".join(addr_parts)
+            if len(address) < 200:
+                fields.append(("Address", address))
 
     # Phone — pattern like "(xxx) xxx-xxxx" or "xxx-xxx-xxxx" near
     # "Registrant's telephone number"
@@ -781,6 +795,96 @@ def _strip_note_ref_columns(tables: list[list[list[str]]]) -> list[list[list[str
     return result
 
 
+def _recover_orphaned_text_rows(
+    section_text: str,
+    first_table: list[list[str]],
+) -> list[list[str]]:
+    """Recover financial data rows from section text not captured by pdfplumber.
+
+    pdfplumber sometimes starts its table extraction after a leading data row
+    (e.g. "Cash, cash equivalents, beginning balances $ 29,943 $ 30,737").
+    This function finds such rows in the text before the first table row and
+    returns them as split multi-column lists ready to prepend to the table.
+    """
+    if not first_table or not section_text:
+        return []
+
+    # Find the label of the first non-empty table row to locate where the
+    # table starts in the raw text
+    first_label = ""
+    for row in first_table:
+        cell = (row[0] if row else "").strip()
+        if cell:
+            first_label = cell
+            break
+    if not first_label:
+        return []
+
+    # For single-column tables, the label may include values concatenated
+    # (e.g. "Operating activities:"); extract just the label part
+    first_label_words = re.split(r"\s+\d", first_label)[0].strip().rstrip(":")
+
+    text_lines = section_text.splitlines()
+
+    # Find the line index in text where the first table row label appears
+    table_start_idx = -1
+    for idx, line in enumerate(text_lines):
+        if first_label_words and first_label_words.lower() in line.lower():
+            table_start_idx = idx
+            break
+
+    if table_start_idx <= 0:
+        return []
+
+    # Collect text lines before the table that contain financial values.
+    # Join continuation lines: a line without values followed by a line with values.
+    # Pattern: detect lines with $ + number patterns (actual financial data).
+    _dollar_val = re.compile(r"\$\s*[\d,]+")
+
+    orphaned: list[list[str]] = []
+    i = 0
+    while i < table_start_idx:
+        line = text_lines[i].strip()
+        # Skip headers, scale indicators, date headers, empty lines
+        if not line or re.match(r"(?i)^\(?\s*in\s+(?:thousands|millions|billions)", line):
+            i += 1
+            continue
+        # Skip title lines (all caps, short)
+        if line.isupper() and len(line) < 80:
+            i += 1
+            continue
+        # Skip standalone date/year header lines
+        if re.match(r"^(?:Years?\s+ended|September|October|November|December|January|February|March|April|May|June|July|August)\s", line, re.IGNORECASE):
+            i += 1
+            continue
+        if re.match(r"^\d{4}(?:\s+\d{4})*\s*$", line):
+            i += 1
+            continue
+
+        # Check if this line has dollar values
+        if _dollar_val.search(line):
+            parsed = split_single_col_row(line)
+            if len(parsed) >= 2:
+                orphaned.append(parsed)
+            i += 1
+            continue
+
+        # Check if next line has dollar values (continuation pattern)
+        if i + 1 < table_start_idx:
+            next_line = text_lines[i + 1].strip()
+            if _dollar_val.search(next_line):
+                joined = line + " " + next_line
+                parsed = split_single_col_row(joined)
+                if len(parsed) >= 2:
+                    orphaned.append(parsed)
+                i += 2
+                continue
+
+        i += 1
+
+    return orphaned
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -849,6 +953,14 @@ def tables_to_markdown(
         if dominant_len <= 1:
             collapsed_tables[ti] = [split_single_col_row(r[0] if r else "") for r in table]
 
+    # Recover financial data rows from section text that pdfplumber missed.
+    # e.g. "Cash, cash equivalents, beginning balances $ 29,943 $ 30,737"
+    # appearing in text before the first table row but not in any table.
+    if collapsed_tables:
+        orphaned = _recover_orphaned_text_rows(section_text, collapsed_tables[0])
+        if orphaned:
+            collapsed_tables[0] = orphaned + collapsed_tables[0]
+
     # Strip Note reference columns (small integers between label and financial data)
     collapsed_tables = _strip_note_ref_columns(collapsed_tables)
 
@@ -857,8 +969,23 @@ def tables_to_markdown(
     # like "Cash, beginning of period  January 26, 2025").
     _scale_re = re.compile(r"^\(?\s*in\s+(?:thousands|millions|billions)", re.IGNORECASE)
     _date_only_re = re.compile(
-        r"^(?:January|February|March|April|May|June|July|August|September|October|November|December)"
-        r"\s+\d{1,2},?\s*(?:\d{4})?\s*$",
+        r"^(?:"
+        # Month Day, Year — e.g. "September 28, 2024"
+        r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{1,2},?\s*(?:\d{4})?"
+        r"|"
+        # Standalone year(s) — e.g. "2024" or "2025 2024"
+        r"\d{4}(?:\s+\d{4})*"
+        r"|"
+        # Period descriptions — e.g. "Three Months Ended June 30, 2025"
+        r"(?:Three|Six|Nine|Twelve)\s+Months?\s+Ended\b.*"
+        r"|"
+        # Year/Period Ended — e.g. "Year Ended December 31, 2024"
+        r"(?:Year|Period)\s+Ended\b.*"
+        r"|"
+        # Fiscal year labels — e.g. "Fiscal Year 2024"
+        r"Fiscal\s+Year\s+\d{4}"
+        r")\s*$",
         re.IGNORECASE,
     )
     for ti, table in enumerate(collapsed_tables):
