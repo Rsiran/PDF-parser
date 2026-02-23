@@ -601,19 +601,34 @@ def _extract_column_headers(text: str) -> tuple[list[str], list[str]]:
                 continue
 
         # Match date headers like "June 30," / "December 31,"
-        m = re.match(
-            r"^(\w+\s+\d{1,2},?)$",
+        # Also handles multiple dates on one line: "September 27, September 28,"
+        _MONTH = (
+            r"(?:January|February|March|April|May|June|July|August|"
+            r"September|October|November|December)"
+        )
+        date_matches = re.findall(
+            _MONTH + r"\s+\d{1,2},?",
             line_s,
         )
-        if m and not year_columns:
-            # This might be a standalone date header for balance sheet
-            period_headers.append(m.group(1))
+        if date_matches and not period_headers and len(line_s) < 60:
+            period_headers.extend(date_matches)
             continue
 
         # Match year line like "2025 2024" or "2025 2024 2025 2024"
+        # Also handles lines with prefix text: "Note 2025 2024"
         year_match = re.match(r"^(\d{4}(?:\s+\d{4})+)\s*$", line_s)
         if year_match and not year_columns:
             year_columns = line_s.split()
+        elif not year_columns:
+            # Try to extract trailing years from lines like "Note 2025 2024"
+            trailing = re.search(r"(\d{4}(?:\s+\d{4})+)\s*$", line_s)
+            if trailing:
+                candidate = trailing.group(1).split()
+                # Only accept if all look like recent years and there are 2+
+                if len(candidate) >= 2 and all(
+                    1990 <= int(y) <= 2050 for y in candidate
+                ):
+                    year_columns = candidate
 
     return period_headers, year_columns
 
@@ -648,6 +663,61 @@ def _build_header_rows(
         rows.append(row)
 
     return rows
+
+
+def _is_prose_table(table: list[list[str]]) -> bool:
+    """Detect tables that are actually prose text split across columns.
+
+    pdfplumber's text-based table strategy sometimes splits paragraph text into
+    many columns, producing garbled multi-column "tables" where sentence
+    fragments appear in each cell.  Real financial tables have many numeric
+    cells; prose tables have almost none.
+
+    Heuristics:
+    1. Many columns (>6) — prose tends to get split into 8-16+ columns
+    2. Low numeric ratio — financial tables are ~40-60% numeric; prose <15%
+    3. Short average cell length with long joined rows — word fragments
+    """
+    if not table or len(table) < 2:
+        return False
+
+    max_cols = max(len(row) for row in table)
+    if max_cols <= 6:
+        return False  # Financial tables commonly have 4-6 columns
+
+    # Gather non-empty cells
+    all_cells = [(c or "").strip() for row in table for c in row if (c or "").strip()]
+    if len(all_cells) < 5:
+        return False
+
+    # Check numeric ratio
+    numeric_count = sum(1 for c in all_cells if _is_numeric(c) and len(c) < 30)
+    numeric_ratio = numeric_count / len(all_cells)
+    if numeric_ratio > 0.25:
+        return False  # Has substantial numeric data — likely a real table
+
+    # Check if rows reconstruct readable prose (long joined text, short cells)
+    avg_cell_len = sum(len(c) for c in all_cells) / len(all_cells)
+    if avg_cell_len > 40:
+        return False  # Cells are long enough to be real table content
+
+    # Join a few data rows and check if they form prose-like text
+    prose_rows = 0
+    for row in table[:10]:
+        joined = " ".join((c or "").strip() for c in row).strip()
+        # Prose rows are long when joined and contain common English words
+        if len(joined) > 60:
+            # Count words (prose has many short common words)
+            words = joined.split()
+            if len(words) > 8:
+                prose_rows += 1
+
+    # If most sampled rows look like prose, reject this table
+    sample_size = min(len(table), 10)
+    if sample_size > 0 and prose_rows / sample_size >= 0.4:
+        return True
+
+    return False
 
 
 def _is_numeric(cell: str) -> bool:
@@ -911,6 +981,9 @@ def tables_to_markdown(
     filtered_tables: list[list[list[str]]] = []
     for table in tables:
         if not table:
+            continue
+        # Reject prose text that pdfplumber split into many columns
+        if _is_prose_table(table):
             continue
         # Check if this looks like a text paragraph: few columns, mostly long
         # text cells, no numeric data

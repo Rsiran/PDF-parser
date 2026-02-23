@@ -1,31 +1,35 @@
-# Round 3 Fix Plan
+# Round 4 Fix Plan
 
 ## Priority Order (dependency-aware)
 
-### Phase 1: Taxonomy & Normalization
-- [x] US-001: Add missing canonical entries to taxonomy.yaml (long_term_investments, other_current_liabilities, other_non_current_liabilities)
-- [x] US-002: Fix canonical normalization for current vs non-current items (context-aware disambiguation in normalize.py/programmatic.py)
+### Phase 1: Prose-vs-Table Discrimination
+- [x] US-001: Detect and reject false prose tables (heuristic in programmatic.py to identify >6-col tables with word-fragment cells, discard or convert to prose)
 
-### Phase 2: Core Table & Section Fixes
-- [x] US-003: Eliminate duplicate notes in raw-text fallback (suppress pdfplumber tables when raw-text already covers those pages)
-- [x] US-004: Fix stockholders' equity column alignment for sparse rows (pad collapsed rows to match dominant column count)
-- [x] US-005: Capture cash flow beginning balance row for AAPL
-- [x] US-006: Detect Comprehensive Income as separate section (add comprehensive_income to SECTION_PATTERNS)
+### Phase 2: Column Header Restoration
+- [x] US-002: Preserve first-row column headers in financial tables (only strip date rows AFTER first data row, not the header row)
 
-### Phase 3: Table Cell & Header Cleanup
-- [x] US-007: Apply character collapse to table cell values in pdf_extract.py
-- [x] US-008: Remove leaked column header rows (date/period patterns) from financial tables
+### Phase 3: JPM Combined Report Fixes
+- [ ] US-003: Fix JPM cover page metadata extraction (add NYSE/NASDAQ fallback pattern for company/ticker)
+- [ ] US-004: Fix JPM financial statement section boundaries (prefer pages with numeric tabular data over MDA discussion pages)
+- [ ] US-005: Fix JPM Notes section boundary (extend end boundary to cover full 150-page notes range)
 
-### Phase 4: Metadata Improvements
-- [x] US-009: Improve address parsing for multi-line cover pages
+### Phase 4: Address Parsing
+- [ ] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
 
-### Phase 5: JPM Combined Annual Report Support
-- [x] US-010: Add detect_10k_start_page() function to find where 10-K begins in combined documents
-- [x] US-011: Integrate 10-K start page into pipeline (section splitting, cover page, scale detection start from 10-K page)
-- [x] US-012: Verify JPM financial statements contain correct data after pipeline integration
+### Phase 5: Missing Section Detection
+- [ ] US-007: Detect AAPL Risk Factors section (fix Item 1A pattern matching)
 
-### Phase 6: Stretch
-- [x] US-013: Reduce garbled rotated-text column headers (de-interleave heuristic, best effort)
+### Phase 6: Page Artifact Cleanup
+- [ ] US-008: Strip page number artifacts from notes and prose (F-xx, standalone numbers, running headers)
+
+### Phase 7: Stretch
+- [ ] US-009: Fix XOM financial statements to render as markdown tables (investigate text-mode extraction path)
+- [ ] US-010: Investigate IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
+- [ ] US-011: Handle two-column exhibit layout garbling (detect and mark or extract sequentially)
+- [ ] US-012: Fix section header canonical mismatches (skip canonical mapping for lines ending with ":")
+- [ ] US-013: Fix Gemini notes extraction error for AAPL (handle None in str.join)
+- [ ] US-014: Fix XOM share repurchase table missing data rows
+- [ ] US-015: Fix XOM MDA section boundary
 
 ## Verification
 After each fix, run:
