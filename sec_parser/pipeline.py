@@ -20,7 +20,16 @@ from .ifrs_section_split import (
 )
 from .metadata import extract_metadata
 from .normalize import load_taxonomy
-from .programmatic import clean_prose, extract_cover_fields, format_exhibits, parse_cover_page, process_notes_fallback, tables_to_markdown
+from .programmatic import (
+    _extract_column_headers,
+    _parse_text_as_table,
+    clean_prose,
+    extract_cover_fields,
+    format_exhibits,
+    parse_cover_page,
+    process_notes_fallback,
+    tables_to_markdown,
+)
 from .validate import extract_statement_data, render_validation_markdown, run_all_checks
 from .markdown_writer import (
     IFRS_REQUIRED_SECTIONS,
@@ -214,10 +223,21 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
             if verbose:
                 print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
             rows_out: list[list[str]] = []
-            processed[key] = tables_to_markdown(
+            result = tables_to_markdown(
                 section.text, section.tables,
                 taxonomy=taxonomy, normalized_data_out=rows_out,
             )
+            # If tables_to_markdown returned plain text (no markdown table),
+            # try parsing the text itself as a table (for PDFs like XOM where
+            # pdfplumber tables lack row labels but text has complete data)
+            if "|" not in result:
+                period_headers, year_columns = _extract_column_headers(section.text)
+                text_table = _parse_text_as_table(
+                    section.text, period_headers, year_columns
+                )
+                if text_table:
+                    result = text_table
+            processed[key] = result
             if key in STATEMENT_TYPE_MAP:
                 normalized_rows[key] = rows_out
 

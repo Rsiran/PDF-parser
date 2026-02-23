@@ -23,7 +23,7 @@
 - [x] US-008: Strip page number artifacts from notes and prose (F-xx, standalone numbers, running headers)
 
 ### Phase 7: Stretch
-- [ ] US-009: Fix XOM financial statements to render as markdown tables (investigate text-mode extraction path)
+- [x] US-009: Fix XOM financial statements to render as markdown tables (text-based parsing when pdfplumber tables lack labels; minor header garbling remains)
 - [ ] US-010: Investigate IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
 - [ ] US-011: Handle two-column exhibit layout garbling (detect and mark or extract sequentially)
 - [ ] US-012: Fix section header canonical mismatches (skip canonical mapping for lines ending with ":")

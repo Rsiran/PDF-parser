@@ -960,6 +960,113 @@ def _recover_orphaned_text_rows(
     return orphaned
 
 
+# ---------------------------------------------------------------------------
+# Text-based table parsing (for PDFs where pdfplumber tables lack row labels)
+# ---------------------------------------------------------------------------
+
+# Numeric token: digits with commas/periods, parenthesized negatives, or dashes
+_TEXT_NUM_TOKEN = re.compile(r"\([\d,]+(?:\.\d+)?\)|[\d,]+(?:\.\d+)?|—|–")
+
+
+def _parse_text_as_table(
+    section_text: str,
+    period_headers: list[str] | None = None,
+    year_columns: list[str] | None = None,
+) -> str | None:
+    """Try to parse financial data from raw section text into a markdown table.
+
+    Used when pdfplumber tables lack row labels (e.g. XOM where labels appear
+    in the text overlay, not the table grid). Detects the dominant value column
+    count, then for each data line extracts the rightmost N numeric tokens as
+    values and everything before as the row label.
+
+    Returns a markdown table string, or None if the text doesn't look tabular.
+    """
+    lines = section_text.splitlines()
+    # Filter page numbers
+    lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+
+    # Count value tokens per line to detect the dominant column count
+    val_counts: list[int] = []
+    for line in lines:
+        tokens = _TEXT_NUM_TOKEN.findall(line)
+        # Filter small note refs (single/double digit integers)
+        big_tokens = [t for t in tokens if len(t) > 2 or not t.isdigit()]
+        val_counts.append(len(big_tokens))
+
+    if not val_counts:
+        return None
+
+    count_freq = Counter(c for c in val_counts if c > 0)
+    if not count_freq:
+        return None
+
+    expected_cols = count_freq.most_common(1)[0][0]
+    if expected_cols < 1:
+        return None
+
+    # Need enough data lines to justify table rendering
+    data_line_count = sum(1 for c in val_counts if c >= expected_cols)
+    if data_line_count < 3:
+        return None
+
+    # Parse lines into header rows and data rows
+    header_rows: list[list[str]] = []
+    data_rows: list[list[str]] = []
+    seen_data = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        matches = list(_TEXT_NUM_TOKEN.finditer(stripped))
+        # Filter small note refs from matches
+        big_matches = [m for m in matches if len(m.group()) > 2 or not m.group().isdigit()]
+
+        if len(big_matches) >= expected_cols:
+            seen_data = True
+            value_matches = big_matches[-expected_cols:]
+            label_end = value_matches[0].start()
+            label = stripped[:label_end].rstrip()
+            vals = [m.group() for m in value_matches]
+            # Strip trailing note ref from label (single 1-2 digit number)
+            label = re.sub(r"\s+\d{1,2}\s*$", "", label)
+            if not label:
+                label = "Total"
+            data_rows.append([label] + vals)
+        elif not seen_data:
+            # Lines before first data row might be title/header — skip them
+            # (we'll use period_headers/year_columns for the header)
+            pass
+        else:
+            # Section sub-header within data (e.g. "Costs and other deductions")
+            if stripped and len(stripped) < 80:
+                data_rows.append([stripped] + [""] * expected_cols)
+
+    if len(data_rows) < 3:
+        return None
+
+    # Build header from period_headers/year_columns or from detected years
+    col_count = expected_cols + 1  # +1 for label column
+    if not header_rows:
+        if year_columns and len(year_columns) == expected_cols:
+            header_rows = [[""] + year_columns]
+        elif period_headers:
+            header_rows = [[""] + period_headers[:expected_cols]]
+        else:
+            # Try to find year headers from the first few lines
+            for line in section_text.splitlines()[:5]:
+                year_matches = re.findall(r"\b(20\d{2})\b", line)
+                if len(year_matches) == expected_cols:
+                    header_rows = [[""] + year_matches]
+                    break
+            if not header_rows:
+                header_rows = [[""] + [f"Col {i+1}" for i in range(expected_cols)]]
+
+    return _render_markdown_table(header_rows, data_rows, col_count)
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
