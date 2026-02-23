@@ -248,9 +248,15 @@ def metadata_to_yaml(meta: dict) -> str:
     """Render metadata dict as a YAML front-matter block (--- delimited).
 
     Uses manual string formatting (not pyyaml serialization).
+    Supports nested dicts (rendered as YAML mappings) for data_sources/confidence.
     """
     lines = ["---"]
     for key, value in meta.items():
-        lines.append(f"{key}: {_yaml_value(value)}")
+        if isinstance(value, dict):
+            lines.append(f"{key}:")
+            for sub_key, sub_val in value.items():
+                lines.append(f"  {sub_key}: {_yaml_value(sub_val)}")
+        else:
+            lines.append(f"{key}: {_yaml_value(value)}")
     lines.append("---")
     return "\n".join(lines) + "\n"

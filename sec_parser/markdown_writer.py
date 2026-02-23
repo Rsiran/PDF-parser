@@ -80,6 +80,7 @@ def assemble_markdown(
     required_sections: set[str] | None = None,
     metadata: dict | None = None,
     validation_markdown: str = "",
+    confidence_markdown: str = "",
 ) -> str:
     """Build the final markdown string from processed section content.
 
@@ -131,6 +132,11 @@ def assemble_markdown(
     if validation_markdown:
         parts.append("## Validation\n")
         parts.append(validation_markdown)
+        parts.append("")
+
+    if confidence_markdown:
+        parts.append("## Data Confidence\n")
+        parts.append(confidence_markdown)
         parts.append("")
 
     return "\n".join(parts) + "\n"

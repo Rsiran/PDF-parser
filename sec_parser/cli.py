@@ -69,6 +69,11 @@ def main() -> None:
         default=None,
         help="Gemini model to use (overrides GEMINI_MODEL env var)",
     )
+    parser.add_argument(
+        "--no-xbrl",
+        action="store_true",
+        help="Disable XBRL fetching from SEC EDGAR (use PDF extraction only)",
+    )
 
     args = parser.parse_args()
 
@@ -97,7 +102,8 @@ def main() -> None:
     for i, pdf_path in enumerate(pdfs, 1):
         print(f"\n[{i}/{len(pdfs)}] {pdf_path.name}", file=sys.stderr)
         try:
-            result = process_pdf(pdf_path, output_dir, verbose=args.verbose)
+            use_xbrl = not args.no_xbrl
+            result = process_pdf(pdf_path, output_dir, verbose=args.verbose, use_xbrl=use_xbrl)
             successes.append(result)
             print(f"  -> {result.output_path}", file=sys.stderr)
         except Exception as e:
@@ -120,6 +126,16 @@ def main() -> None:
     # Summary
     print(f"\n{'='*60}", file=sys.stderr)
     print(f"Done. {len(successes)} succeeded, {len(failures)} failed.", file=sys.stderr)
+
+    # XBRL source breakdown
+    if not args.no_xbrl and successes:
+        xbrl_count = sum(
+            1 for r in successes
+            if any(v == "xbrl" for v in r.data_sources.values())
+        )
+        pdf_only = len(successes) - xbrl_count
+        if xbrl_count or pdf_only:
+            print(f"  Sources: {xbrl_count} with XBRL data, {pdf_only} PDF-only", file=sys.stderr)
 
     if failures:
         print("\nFailures:", file=sys.stderr)
