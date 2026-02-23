@@ -14,7 +14,7 @@
 - [x] US-005: Fix JPM Notes section boundary (extend end boundary to cover full 150-page notes range)
 
 ### Phase 4: Address Parsing
-- [ ] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
+- [x] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
 
 ### Phase 5: Missing Section Detection
 - [ ] US-007: Detect AAPL Risk Factors section (fix Item 1A pattern matching)

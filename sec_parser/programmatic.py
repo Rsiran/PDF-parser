@@ -149,6 +149,10 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
                 break
             if re.match(r"^\(", line):  # another parenthetical descriptor
                 break
+            # Skip SEC cover page label fragments (continuation lines of
+            # parenthetical descriptors like "of incorporation or organization)")
+            if re.search(r"incorporation\b|Identification\s+N[ou]", line, re.IGNORECASE):
+                continue
             addr_parts.insert(0, line)
         if addr_parts:
             address = ", ".join(addr_parts)
