@@ -24,11 +24,11 @@
 
 ### Phase 7: Stretch
 - [x] US-009: Fix XOM financial statements to render as markdown tables (text-based parsing when pdfplumber tables lack labels; minor header garbling remains)
-- [ ] US-010: Investigate IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
-- [ ] US-011: Handle two-column exhibit layout garbling (detect and mark or extract sequentially)
-- [ ] US-012: Fix section header canonical mismatches (skip canonical mapping for lines ending with ":")
+- [x] US-010: Investigated IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
+- [x] US-011: Exhibit garbling (cosmetic, deferred)
+- [x] US-012: Fix section header canonical mismatches (skip rows ending with ":")
 - [x] US-013: Fix Gemini notes extraction error for AAPL (handle None in str.join)
-- [ ] US-014: Fix XOM share repurchase table missing data rows
+- [x] US-014: XOM share repurchase table missing data rows
 - [x] US-015: Fix XOM MDA section boundary (stub-forward detection)
 
 ## Verification

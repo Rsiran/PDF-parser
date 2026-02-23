@@ -124,13 +124,17 @@ def normalize_table_rows(
             elif _CURRENT_HEADER.search(stripped):
                 context = "current"
 
-            # Check for context-dependent override
-            override = _CONTEXT_OVERRIDES.get(stripped.lower(), {})
-            if context and context in override:
-                canonical = override[context]
+            # Section sub-headers end with ":" — don't normalize them
+            if stripped.endswith(":"):
+                canonical = ""
             else:
-                match = match_line_item(stripped, taxonomy, alias_index=alias_index)
-                canonical = match.canonical if match.canonical else ""
+                # Check for context-dependent override
+                override = _CONTEXT_OVERRIDES.get(stripped.lower(), {})
+                if context and context in override:
+                    canonical = override[context]
+                else:
+                    match = match_line_item(stripped, taxonomy, alias_index=alias_index)
+                    canonical = match.canonical if match.canonical else ""
 
         new_row = [row[0], canonical] + row[1:]
         result.append(new_row)
