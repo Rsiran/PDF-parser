@@ -1098,13 +1098,17 @@ def tables_to_markdown(
                         labeled_rows += 1
                         break
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
-        return section_text
+        # Strip standalone page numbers before returning raw text fallback
+        lines = section_text.splitlines()
+        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+        return "\n".join(lines)
 
-    # Fix 5B: Label anonymous subtotal rows (single numeric cell, no label)
+    # Strip standalone page number rows (single cell, 1-3 digit integer)
     for table in collapsed_tables:
-        for ri, row in enumerate(table):
-            if len(row) == 1 and _is_numeric(row[0]) and row[0].strip() not in ("—", "-", "–", ""):
-                table[ri] = ["Total", row[0]]
+        table[:] = [
+            row for row in table
+            if not (len(row) == 1 and re.match(r"^\s*\d{1,3}\s*$", row[0]))
+        ]
 
     # Try to merge tables with matching column counts (multi-page continuations)
     merged: list[list[list[str]]] = []

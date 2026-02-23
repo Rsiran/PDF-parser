@@ -17,10 +17,10 @@
 - [x] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
 
 ### Phase 5: Missing Section Detection
-- [ ] US-007: Detect AAPL Risk Factors section (fix Item 1A pattern matching)
+- [x] US-007: Detect AAPL Risk Factors section (fixed by US-004 heading match improvements)
 
 ### Phase 6: Page Artifact Cleanup
-- [ ] US-008: Strip page number artifacts from notes and prose (F-xx, standalone numbers, running headers)
+- [x] US-008: Strip page number artifacts from notes and prose (F-xx, standalone numbers, running headers)
 
 ### Phase 7: Stretch
 - [ ] US-009: Fix XOM financial statements to render as markdown tables (investigate text-mode extraction path)
