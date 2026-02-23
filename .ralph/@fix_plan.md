@@ -27,9 +27,9 @@
 - [ ] US-010: Investigate IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
 - [ ] US-011: Handle two-column exhibit layout garbling (detect and mark or extract sequentially)
 - [ ] US-012: Fix section header canonical mismatches (skip canonical mapping for lines ending with ":")
-- [ ] US-013: Fix Gemini notes extraction error for AAPL (handle None in str.join)
+- [x] US-013: Fix Gemini notes extraction error for AAPL (handle None in str.join)
 - [ ] US-014: Fix XOM share repurchase table missing data rows
-- [ ] US-015: Fix XOM MDA section boundary
+- [x] US-015: Fix XOM MDA section boundary (stub-forward detection)
 
 ## Verification
 After each fix, run:

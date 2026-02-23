@@ -384,6 +384,30 @@ def split_sections(pages: list[PageData]) -> dict[str, SectionData]:
     last_page = pages[-1].page_number
     starts = _find_section_starts(pages)
 
+    # Fix: when MDA is detected but covers ≤1 page before the next section,
+    # it may be a "reference forward" stub (e.g. XOM: "Item 7. MDA — see
+    # Financial Section"). Look for a second MDA heading later and use that.
+    mda_idx = next((i for i, (k, _) in enumerate(starts) if k == MDA), None)
+    if mda_idx is not None:
+        mda_pg = starts[mda_idx][1]
+        next_pg = starts[mda_idx + 1][1] if mda_idx + 1 < len(starts) else last_page + 1
+        if next_pg - mda_pg <= 1:
+            # MDA is a stub — search for a second heading match
+            mda_pattern = next(pat for k, pat in SECTION_PATTERNS if k == MDA)
+            for page in pages:
+                if page.page_number <= mda_pg:
+                    continue
+                if _is_toc_page(page):
+                    continue
+                for m in mda_pattern.finditer(page.text):
+                    if _is_heading_match(page.text, m):
+                        starts[mda_idx] = (MDA, page.page_number)
+                        starts.sort(key=lambda x: x[1])
+                        break
+                else:
+                    continue
+                break
+
     # Build a lookup: page_number -> PageData
     page_by_num: dict[int, PageData] = {p.page_number: p for p in pages}
 
