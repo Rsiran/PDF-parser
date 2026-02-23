@@ -431,6 +431,7 @@ def split_sections(pages: list[PageData]) -> dict[str, SectionData]:
         BALANCE_SHEET: 5,
         CASH_FLOW: 5,
         STOCKHOLDERS_EQUITY: 5,
+        RISK_FACTORS: 25,
     }
 
     for i, (key, start_pg) in enumerate(starts):

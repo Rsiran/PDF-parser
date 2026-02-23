@@ -6,7 +6,7 @@
 - [x] US-001: Tighten _is_prose_table() thresholds — max_cols >= 6 (was > 6), numeric_ratio > 0.15 (was > 0.25)
 
 ### Phase 2: Section Boundary Fixes
-- [ ] US-002: Cap Risk Factors at 25 pages to prevent duplication (add to _MAX_PAGES in section_split.py)
+- [x] US-002: Cap Risk Factors at 25 pages to prevent duplication (add to _MAX_PAGES in section_split.py)
 
 ### Phase 3: Table Rendering
 - [ ] US-003: Fix AAPL Comprehensive Income to render as markdown table (text-based fallback in pipeline.py/programmatic.py)
