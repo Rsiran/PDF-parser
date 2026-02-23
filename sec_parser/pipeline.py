@@ -8,6 +8,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .detect import detect_10k_start_page, detect_report_type
+from .edgar_client import (
+    EdgarFetchError,
+    clear_cache as clear_edgar_cache,
+    extract_statement_facts,
+    fetch_company_facts,
+    fetch_submissions,
+    find_filing_accession,
+    load_xbrl_taxonomy_map,
+    render_xbrl_statement,
+)
 from .gemini_client import extract_notes
 from .ifrs_section_split import (
     IFRS_BALANCE_SHEET,
@@ -17,6 +27,12 @@ from .ifrs_section_split import (
     IFRS_NOTES,
     IFRS_SECTION_TITLES,
     split_ifrs_sections,
+)
+from .confidence import (
+    ExtractionConfidence,
+    compute_confidence,
+    cross_validate,
+    render_confidence_markdown,
 )
 from .metadata import extract_metadata
 from .normalize import load_taxonomy
@@ -63,6 +79,8 @@ class ProcessingResult:
     output_path: Path
     mappings: dict[str, str] = field(default_factory=dict)  # label -> canonical
     metadata: dict = field(default_factory=dict)
+    data_sources: dict[str, str] = field(default_factory=dict)  # section -> "xbrl"|"pdf"
+    confidences: list = field(default_factory=list)  # list[ExtractionConfidence]
 
 
 IFRS_FINANCIAL_STATEMENTS = [
@@ -81,6 +99,15 @@ STATEMENT_TYPE_MAP = {
     INCOME_STATEMENT: "income_statement",
     BALANCE_SHEET: "balance_sheet",
     CASH_FLOW: "cash_flow",
+}
+
+# Map section keys to XBRL taxonomy map keys (all 5 financial statements)
+XBRL_STATEMENT_MAP = {
+    INCOME_STATEMENT: "income_statement",
+    BALANCE_SHEET: "balance_sheet",
+    CASH_FLOW: "cash_flow",
+    STOCKHOLDERS_EQUITY: "stockholders_equity",
+    COMPREHENSIVE_INCOME: "comprehensive_income",
 }
 
 
@@ -147,12 +174,20 @@ def _process_ifrs(
     return ProcessingResult(output_path=output_path)
 
 
-def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> ProcessingResult:
+def process_pdf(
+    pdf_path: Path,
+    output_dir: Path,
+    verbose: bool = False,
+    use_xbrl: bool = True,
+) -> ProcessingResult:
     """Process a financial report PDF into a structured markdown file.
 
     Auto-detects SEC vs IFRS report type.
     Returns a ProcessingResult with the output path, label mappings, and metadata.
     Raises RuntimeError for scanned PDFs or other unrecoverable errors.
+
+    When use_xbrl=True (default), attempts to fetch XBRL data from SEC EDGAR
+    for financial statements. Falls back to PDF extraction on failure.
     """
     if verbose:
         print(f"Extracting text from {pdf_path.name}...", file=sys.stderr)
@@ -209,20 +244,101 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
     # Load taxonomy for line-item normalization
     taxonomy = load_taxonomy()
 
-    # Cover page — programmatic regex extraction
+    # Cover page — programmatic regex extraction (extract early for XBRL matching)
+    cover_fields: list[tuple[str, str]] = []
     if COVER_PAGE in sections:
         if verbose:
             print(f"  Processing {SECTION_TITLES[COVER_PAGE]}...", file=sys.stderr)
+        cover_fields = extract_cover_fields(sections[COVER_PAGE].text)
         processed[COVER_PAGE] = parse_cover_page(sections[COVER_PAGE].text)
 
-    # Financial statements — programmatic table collapse with normalization
+    # For combined documents, supplement cover fields from pre-10K pages
+    if pre_10k_text:
+        field_labels = {label for label, _ in cover_fields}
+        if "Company" not in field_labels or "Ticker" not in field_labels:
+            pre_fields = extract_cover_fields(pre_10k_text)
+            for label, value in pre_fields:
+                if label not in field_labels:
+                    cover_fields.append((label, value))
+                    field_labels.add(label)
+
+    # --- XBRL fetch (if enabled and CIK available) ---
+    xbrl_facts_by_section: dict[str, object] = {}  # section_key -> XBRLStatementData
+    data_sources: dict[str, str] = {}
+
+    cover_lookup = dict(cover_fields)
+    cik = cover_lookup.get("CIK", "")
+
+    if use_xbrl and cik:
+        try:
+            xbrl_map = load_xbrl_taxonomy_map()
+            if verbose:
+                print(f"  Fetching XBRL data for CIK {cik}...", file=sys.stderr)
+            company_facts = fetch_company_facts(cik)
+            submissions = fetch_submissions(cik)
+
+            # We need filing_type and period_end for accession matching
+            filing_type_for_match = cover_lookup.get("Filing Type", "")
+            from .metadata import _parse_period_date
+            period_str = cover_lookup.get("Period", "")
+            period_end_for_match, _ = _parse_period_date(period_str)
+
+            if filing_type_for_match and period_end_for_match:
+                accession = find_filing_accession(
+                    submissions, filing_type_for_match, period_end_for_match
+                )
+                if accession:
+                    if verbose:
+                        print(f"  Found EDGAR filing: {accession}", file=sys.stderr)
+                    for section_key, xbrl_stmt_type in XBRL_STATEMENT_MAP.items():
+                        stmt_map = xbrl_map.get(xbrl_stmt_type, {})
+                        if stmt_map:
+                            xbrl_data = extract_statement_facts(
+                                company_facts, accession, xbrl_stmt_type, stmt_map
+                            )
+                            if xbrl_data:
+                                xbrl_facts_by_section[section_key] = xbrl_data
+                    if verbose and xbrl_facts_by_section:
+                        xbrl_sections = [SECTION_TITLES.get(k, k) for k in xbrl_facts_by_section]
+                        print(f"  XBRL data found for: {', '.join(xbrl_sections)}", file=sys.stderr)
+                elif verbose:
+                    print(f"  No EDGAR filing match for {filing_type_for_match} {period_end_for_match}", file=sys.stderr)
+            elif verbose:
+                print("  Insufficient metadata for EDGAR filing match", file=sys.stderr)
+        except EdgarFetchError as exc:
+            if verbose:
+                print(f"  XBRL fetch failed: {exc}", file=sys.stderr)
+        except Exception as exc:
+            if verbose:
+                print(f"  XBRL fetch error: {exc}", file=sys.stderr)
+    elif use_xbrl and not cik and verbose:
+        print("  No CIK found — skipping XBRL fetch", file=sys.stderr)
+    elif not use_xbrl and verbose:
+        print("  XBRL disabled", file=sys.stderr)
+
+    # Financial statements — XBRL if available, else programmatic table collapse
     normalized_rows: dict[str, list[list[str]]] = {}
     for key in FINANCIAL_STATEMENTS:
-        if key in sections:
+        if key in xbrl_facts_by_section:
+            # Use XBRL data as primary source
+            xbrl_data = xbrl_facts_by_section[key]
+            if verbose:
+                print(f"  Processing {SECTION_TITLES[key]} (XBRL)...", file=sys.stderr)
+            processed[key] = render_xbrl_statement(xbrl_data)
+            data_sources[XBRL_STATEMENT_MAP.get(key, key)] = "xbrl"
+            # Also run PDF extraction for cross-validation (Phase 4)
+            if key in sections and key in STATEMENT_TYPE_MAP:
+                rows_out: list[list[str]] = []
+                tables_to_markdown(
+                    sections[key].text, sections[key].tables,
+                    taxonomy=taxonomy, normalized_data_out=rows_out,
+                )
+                normalized_rows[key] = rows_out
+        elif key in sections:
             section = sections[key]
             if verbose:
-                print(f"  Processing {SECTION_TITLES[key]}...", file=sys.stderr)
-            rows_out: list[list[str]] = []
+                print(f"  Processing {SECTION_TITLES[key]} (PDF)...", file=sys.stderr)
+            rows_out = []
             result = tables_to_markdown(
                 section.text, section.tables,
                 taxonomy=taxonomy, normalized_data_out=rows_out,
@@ -240,6 +356,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
             processed[key] = result
             if key in STATEMENT_TYPE_MAP:
                 normalized_rows[key] = rows_out
+            data_sources[XBRL_STATEMENT_MAP.get(key, key)] = "pdf"
 
     # Notes — keep LLM (only remaining API call)
     if NOTES in sections:
@@ -269,23 +386,6 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
                 processed[key] = format_exhibits(sections[key].text)
             else:
                 processed[key] = clean_prose(sections[key].text)
-
-    # Extract metadata from cover page fields
-    cover_fields: list[tuple[str, str]] = []
-    if COVER_PAGE in sections:
-        cover_fields = extract_cover_fields(sections[COVER_PAGE].text)
-
-    # For combined documents, if company/ticker weren't found in the 10-K
-    # cover page, search the pre-10K annual report pages (shareholder letter
-    # area often contains "(NYSE: TICKER)" patterns).
-    if pre_10k_text:
-        field_labels = {label for label, _ in cover_fields}
-        if "Company" not in field_labels or "Ticker" not in field_labels:
-            pre_fields = extract_cover_fields(pre_10k_text)
-            for label, value in pre_fields:
-                if label not in field_labels:
-                    cover_fields.append((label, value))
-                    field_labels.add(label)
 
     # Search for scale hint in financial statement text
     scale_hint: str | None = None
@@ -329,6 +429,10 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
         cover_text=cover_text,
     )
 
+    # Add data source and confidence info to metadata
+    if data_sources:
+        metadata["data_sources"] = data_sources
+
     # Run validation checks on normalized financial data
     statements: dict[str, dict[str, list[float]]] = {}
     for key, stmt_type in STATEMENT_TYPE_MAP.items():
@@ -344,6 +448,59 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
         if verbose and results:
             print(f"  Validation: {len(results)} checks run", file=sys.stderr)
 
+    # --- Confidence scoring ---
+    confidences: list[ExtractionConfidence] = []
+    for section_key, xbrl_stmt_type in XBRL_STATEMENT_MAP.items():
+        xbrl_data = xbrl_facts_by_section.get(section_key)
+        pdf_data = statements.get(xbrl_stmt_type)
+
+        # Cross-validate if both sources available
+        discs = None
+        if xbrl_data and pdf_data:
+            discs = cross_validate(xbrl_data.line_items, pdf_data)
+            # Print WARN/ERROR discrepancies to stderr always
+            for d in discs:
+                if d.severity in ("warn", "error"):
+                    print(
+                        f"  {d.severity.upper()}: {xbrl_stmt_type}.{d.line_item} "
+                        f"XBRL={d.xbrl_value:,.0f} PDF={d.pdf_value:,.0f} "
+                        f"({d.pct_difference:.1%})",
+                        file=sys.stderr,
+                    )
+
+        # Determine validation status for this statement
+        val_status = None
+        if results:
+            stmt_results = [r for r in results if xbrl_stmt_type.upper()[:2] in r.check.upper()[:5]]
+            if stmt_results:
+                if any(r.status == "FAIL" for r in stmt_results):
+                    val_status = "FAIL"
+                elif any(r.status == "WARN" for r in stmt_results):
+                    val_status = "WARN"
+                else:
+                    val_status = "PASS"
+
+        conf = compute_confidence(
+            xbrl_data=xbrl_data,
+            pdf_data=pdf_data,
+            statement_type=xbrl_stmt_type,
+            discrepancies=discs,
+            validation_status=val_status,
+        )
+        if conf.xbrl_available or conf.pdf_available:
+            confidences.append(conf)
+
+    confidence_md = render_confidence_markdown(confidences) if confidences else ""
+
+    # Add confidence scores to metadata
+    if confidences:
+        metadata["confidence"] = {
+            c.statement_type: c.confidence for c in confidences
+        }
+
+    if verbose and confidences:
+        print(f"  Confidence: {len(confidences)} statements scored", file=sys.stderr)
+
     # Collect label -> canonical mappings from normalized rows
     mappings: dict[str, str] = {}
     for rows in normalized_rows.values():
@@ -358,6 +515,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
     md_content = assemble_markdown(
         pdf_path.name, processed, metadata=metadata,
         validation_markdown=validation_md,
+        confidence_markdown=confidence_md,
     )
     output_path = output_dir / f"{pdf_path.stem}.md"
     write_markdown(output_path, md_content)
@@ -369,4 +527,6 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
         output_path=output_path,
         mappings=mappings,
         metadata=metadata,
+        data_sources=data_sources,
+        confidences=confidences,
     )

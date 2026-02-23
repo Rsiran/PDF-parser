@@ -686,6 +686,16 @@ def _is_prose_table(table: list[list[str]]) -> bool:
     if not table or len(table) < 2:
         return False
 
+    # --- Hard cutoff: large tables with mostly non-numeric cells ---
+    # Tables with >50 rows and >70% text cells are almost certainly prose
+    # that pdfplumber split into columns. Reject before soft heuristics.
+    if len(table) > 50:
+        all_cells_hard = [(c or "").strip() for row in table for c in row if (c or "").strip()]
+        if all_cells_hard:
+            numeric_hard = sum(1 for c in all_cells_hard if _is_numeric(c) and len(c) < 30)
+            if numeric_hard / len(all_cells_hard) < 0.30:
+                return True
+
     max_cols = max(len(row) for row in table)
     if max_cols < 6:
         return False  # Financial tables commonly have 4-6 columns
