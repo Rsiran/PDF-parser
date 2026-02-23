@@ -183,11 +183,43 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
         return False
     if _TOC_LINE_NUMBER.search(line):
         return False
+    # Reject lines that start with a lowercase word or conjunction — these are
+    # mid-sentence references (e.g. "and the Consolidated Statements of Cash
+    # Flows on" or "Refer to Consolidated Statements of...").
+    line_stripped = line.lstrip()
+    if line_stripped and line_stripped[0].islower():
+        return False
+    # Reject lines starting with "Refer", "and", "or", "the", "See" — references
+    prefix_word = line_stripped.split()[0] if line_stripped.split() else ""
+    if prefix_word.lower() in ("and", "or", "the", "refer", "see", "selected"):
+        return False
     # Reject lines where the pattern is followed by significant trailing prose
     # (e.g. "Notes to Financial Statements included in Item 8 of this...")
     trailing = page_text[match.end():line_end].strip()
     if len(trailing) > 50:
         return False
+    # Reject headings that are about *analysis/discussion* of statements rather
+    # than the actual statements (e.g. "Consolidated Balance Sheets and Cash
+    # Flows Analysis" in JPM combined annual report).
+    if trailing and re.search(
+        r"\b(?:ANALYSIS|DISCUSSION|SUMMARY|HIGHLIGHTS?|OVERVIEW|SELECTED|DATA)\b",
+        trailing,
+        re.IGNORECASE,
+    ):
+        return False
+    # Reject lines where the matched heading is followed by punctuation that
+    # indicates it's a mid-sentence reference rather than a standalone heading
+    # (e.g. "Consolidated balance sheets." or "Consolidated balance sheets,")
+    if trailing and trailing[0] in ".;,":
+        return False
+    # Reject lines with trailing content starting with lowercase or "at"/"as"
+    # (e.g. "Consolidated balance sheets at fair value")
+    if trailing:
+        first_trailing_word = trailing.split()[0] if trailing.split() else ""
+        if first_trailing_word and first_trailing_word[0].islower():
+            return False
+        if first_trailing_word.lower() in ("at", "as"):
+            return False
     return True
 
 
@@ -351,6 +383,30 @@ def split_sections(pages: list[PageData]) -> dict[str, SectionData]:
 
     last_page = pages[-1].page_number
     starts = _find_section_starts(pages)
+
+    # Fix: when MDA is detected but covers ≤1 page before the next section,
+    # it may be a "reference forward" stub (e.g. XOM: "Item 7. MDA — see
+    # Financial Section"). Look for a second MDA heading later and use that.
+    mda_idx = next((i for i, (k, _) in enumerate(starts) if k == MDA), None)
+    if mda_idx is not None:
+        mda_pg = starts[mda_idx][1]
+        next_pg = starts[mda_idx + 1][1] if mda_idx + 1 < len(starts) else last_page + 1
+        if next_pg - mda_pg <= 1:
+            # MDA is a stub — search for a second heading match
+            mda_pattern = next(pat for k, pat in SECTION_PATTERNS if k == MDA)
+            for page in pages:
+                if page.page_number <= mda_pg:
+                    continue
+                if _is_toc_page(page):
+                    continue
+                for m in mda_pattern.finditer(page.text):
+                    if _is_heading_match(page.text, m):
+                        starts[mda_idx] = (MDA, page.page_number)
+                        starts.sort(key=lambda x: x[1])
+                        break
+                else:
+                    continue
+                break
 
     # Build a lookup: page_number -> PageData
     page_by_num: dict[int, PageData] = {p.page_number: p for p in pages}

@@ -149,6 +149,10 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
                 break
             if re.match(r"^\(", line):  # another parenthetical descriptor
                 break
+            # Skip SEC cover page label fragments (continuation lines of
+            # parenthetical descriptors like "of incorporation or organization)")
+            if re.search(r"incorporation\b|Identification\s+N[ou]", line, re.IGNORECASE):
+                continue
             addr_parts.insert(0, line)
         if addr_parts:
             address = ", ".join(addr_parts)
@@ -174,7 +178,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
     if "Company" not in labels:
         # Pattern: "(EXCHANGE: TICKER)" often preceded by company name
         m = re.search(
-            r"([A-Z][\w\s&.,'-]+?)\s*\((?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\)",
+            r"([A-Z][\w &.,'-]+?)\s*\((?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\)",
             text,
         )
         if m:
@@ -190,6 +194,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
             )
             if m:
                 fields.append(("Company", m.group(1).strip().rstrip(",")))
+
 
     # Fallback ticker: "NYSE: KO" or "NASDAQ: NBIS" anywhere in text
     if "Ticker" not in labels and not ticker_found:
@@ -601,19 +606,34 @@ def _extract_column_headers(text: str) -> tuple[list[str], list[str]]:
                 continue
 
         # Match date headers like "June 30," / "December 31,"
-        m = re.match(
-            r"^(\w+\s+\d{1,2},?)$",
+        # Also handles multiple dates on one line: "September 27, September 28,"
+        _MONTH = (
+            r"(?:January|February|March|April|May|June|July|August|"
+            r"September|October|November|December)"
+        )
+        date_matches = re.findall(
+            _MONTH + r"\s+\d{1,2},?",
             line_s,
         )
-        if m and not year_columns:
-            # This might be a standalone date header for balance sheet
-            period_headers.append(m.group(1))
+        if date_matches and not period_headers and len(line_s) < 60:
+            period_headers.extend(date_matches)
             continue
 
         # Match year line like "2025 2024" or "2025 2024 2025 2024"
+        # Also handles lines with prefix text: "Note 2025 2024"
         year_match = re.match(r"^(\d{4}(?:\s+\d{4})+)\s*$", line_s)
         if year_match and not year_columns:
             year_columns = line_s.split()
+        elif not year_columns:
+            # Try to extract trailing years from lines like "Note 2025 2024"
+            trailing = re.search(r"(\d{4}(?:\s+\d{4})+)\s*$", line_s)
+            if trailing:
+                candidate = trailing.group(1).split()
+                # Only accept if all look like recent years and there are 2+
+                if len(candidate) >= 2 and all(
+                    1990 <= int(y) <= 2050 for y in candidate
+                ):
+                    year_columns = candidate
 
     return period_headers, year_columns
 
@@ -648,6 +668,61 @@ def _build_header_rows(
         rows.append(row)
 
     return rows
+
+
+def _is_prose_table(table: list[list[str]]) -> bool:
+    """Detect tables that are actually prose text split across columns.
+
+    pdfplumber's text-based table strategy sometimes splits paragraph text into
+    many columns, producing garbled multi-column "tables" where sentence
+    fragments appear in each cell.  Real financial tables have many numeric
+    cells; prose tables have almost none.
+
+    Heuristics:
+    1. Many columns (>6) — prose tends to get split into 8-16+ columns
+    2. Low numeric ratio — financial tables are ~40-60% numeric; prose <15%
+    3. Short average cell length with long joined rows — word fragments
+    """
+    if not table or len(table) < 2:
+        return False
+
+    max_cols = max(len(row) for row in table)
+    if max_cols <= 6:
+        return False  # Financial tables commonly have 4-6 columns
+
+    # Gather non-empty cells
+    all_cells = [(c or "").strip() for row in table for c in row if (c or "").strip()]
+    if len(all_cells) < 5:
+        return False
+
+    # Check numeric ratio
+    numeric_count = sum(1 for c in all_cells if _is_numeric(c) and len(c) < 30)
+    numeric_ratio = numeric_count / len(all_cells)
+    if numeric_ratio > 0.25:
+        return False  # Has substantial numeric data — likely a real table
+
+    # Check if rows reconstruct readable prose (long joined text, short cells)
+    avg_cell_len = sum(len(c) for c in all_cells) / len(all_cells)
+    if avg_cell_len > 40:
+        return False  # Cells are long enough to be real table content
+
+    # Join a few data rows and check if they form prose-like text
+    prose_rows = 0
+    for row in table[:10]:
+        joined = " ".join((c or "").strip() for c in row).strip()
+        # Prose rows are long when joined and contain common English words
+        if len(joined) > 60:
+            # Count words (prose has many short common words)
+            words = joined.split()
+            if len(words) > 8:
+                prose_rows += 1
+
+    # If most sampled rows look like prose, reject this table
+    sample_size = min(len(table), 10)
+    if sample_size > 0 and prose_rows / sample_size >= 0.4:
+        return True
+
+    return False
 
 
 def _is_numeric(cell: str) -> bool:
@@ -885,6 +960,113 @@ def _recover_orphaned_text_rows(
     return orphaned
 
 
+# ---------------------------------------------------------------------------
+# Text-based table parsing (for PDFs where pdfplumber tables lack row labels)
+# ---------------------------------------------------------------------------
+
+# Numeric token: digits with commas/periods, parenthesized negatives, or dashes
+_TEXT_NUM_TOKEN = re.compile(r"\([\d,]+(?:\.\d+)?\)|[\d,]+(?:\.\d+)?|—|–")
+
+
+def _parse_text_as_table(
+    section_text: str,
+    period_headers: list[str] | None = None,
+    year_columns: list[str] | None = None,
+) -> str | None:
+    """Try to parse financial data from raw section text into a markdown table.
+
+    Used when pdfplumber tables lack row labels (e.g. XOM where labels appear
+    in the text overlay, not the table grid). Detects the dominant value column
+    count, then for each data line extracts the rightmost N numeric tokens as
+    values and everything before as the row label.
+
+    Returns a markdown table string, or None if the text doesn't look tabular.
+    """
+    lines = section_text.splitlines()
+    # Filter page numbers
+    lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+
+    # Count value tokens per line to detect the dominant column count
+    val_counts: list[int] = []
+    for line in lines:
+        tokens = _TEXT_NUM_TOKEN.findall(line)
+        # Filter small note refs (single/double digit integers)
+        big_tokens = [t for t in tokens if len(t) > 2 or not t.isdigit()]
+        val_counts.append(len(big_tokens))
+
+    if not val_counts:
+        return None
+
+    count_freq = Counter(c for c in val_counts if c > 0)
+    if not count_freq:
+        return None
+
+    expected_cols = count_freq.most_common(1)[0][0]
+    if expected_cols < 1:
+        return None
+
+    # Need enough data lines to justify table rendering
+    data_line_count = sum(1 for c in val_counts if c >= expected_cols)
+    if data_line_count < 3:
+        return None
+
+    # Parse lines into header rows and data rows
+    header_rows: list[list[str]] = []
+    data_rows: list[list[str]] = []
+    seen_data = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        matches = list(_TEXT_NUM_TOKEN.finditer(stripped))
+        # Filter small note refs from matches
+        big_matches = [m for m in matches if len(m.group()) > 2 or not m.group().isdigit()]
+
+        if len(big_matches) >= expected_cols:
+            seen_data = True
+            value_matches = big_matches[-expected_cols:]
+            label_end = value_matches[0].start()
+            label = stripped[:label_end].rstrip()
+            vals = [m.group() for m in value_matches]
+            # Strip trailing note ref from label (single 1-2 digit number)
+            label = re.sub(r"\s+\d{1,2}\s*$", "", label)
+            if not label:
+                label = "Total"
+            data_rows.append([label] + vals)
+        elif not seen_data:
+            # Lines before first data row might be title/header — skip them
+            # (we'll use period_headers/year_columns for the header)
+            pass
+        else:
+            # Section sub-header within data (e.g. "Costs and other deductions")
+            if stripped and len(stripped) < 80:
+                data_rows.append([stripped] + [""] * expected_cols)
+
+    if len(data_rows) < 3:
+        return None
+
+    # Build header from period_headers/year_columns or from detected years
+    col_count = expected_cols + 1  # +1 for label column
+    if not header_rows:
+        if year_columns and len(year_columns) == expected_cols:
+            header_rows = [[""] + year_columns]
+        elif period_headers:
+            header_rows = [[""] + period_headers[:expected_cols]]
+        else:
+            # Try to find year headers from the first few lines
+            for line in section_text.splitlines()[:5]:
+                year_matches = re.findall(r"\b(20\d{2})\b", line)
+                if len(year_matches) == expected_cols:
+                    header_rows = [[""] + year_matches]
+                    break
+            if not header_rows:
+                header_rows = [[""] + [f"Col {i+1}" for i in range(expected_cols)]]
+
+    return _render_markdown_table(header_rows, data_rows, col_count)
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -911,6 +1093,9 @@ def tables_to_markdown(
     filtered_tables: list[list[list[str]]] = []
     for table in tables:
         if not table:
+            continue
+        # Reject prose text that pdfplumber split into many columns
+        if _is_prose_table(table):
             continue
         # Check if this looks like a text paragraph: few columns, mostly long
         # text cells, no numeric data
@@ -1020,13 +1205,17 @@ def tables_to_markdown(
                         labeled_rows += 1
                         break
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
-        return section_text
+        # Strip standalone page numbers before returning raw text fallback
+        lines = section_text.splitlines()
+        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
+        return "\n".join(lines)
 
-    # Fix 5B: Label anonymous subtotal rows (single numeric cell, no label)
+    # Strip standalone page number rows (single cell, 1-3 digit integer)
     for table in collapsed_tables:
-        for ri, row in enumerate(table):
-            if len(row) == 1 and _is_numeric(row[0]) and row[0].strip() not in ("—", "-", "–", ""):
-                table[ri] = ["Total", row[0]]
+        table[:] = [
+            row for row in table
+            if not (len(row) == 1 and re.match(r"^\s*\d{1,3}\s*$", row[0]))
+        ]
 
     # Try to merge tables with matching column counts (multi-page continuations)
     merged: list[list[list[str]]] = []

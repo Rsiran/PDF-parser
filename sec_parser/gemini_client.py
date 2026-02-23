@@ -36,7 +36,7 @@ def _format_tables_for_prompt(tables: list[list[list[str]]]) -> str:
     for i, table in enumerate(tables, 1):
         parts.append(f"\n### Raw table {i}")
         for row in table:
-            parts.append(" | ".join(row))
+            parts.append(" | ".join(c if c is not None else "" for c in row))
     return "\n".join(parts)
 
 
