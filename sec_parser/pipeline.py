@@ -165,9 +165,19 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
 
     # Detect combined document (annual report + 10-K)
     tenk_start = detect_10k_start_page(pages)
+    pre_10k_text = ""
     if tenk_start > 1:
         if verbose:
             print(f"  Combined document detected: 10-K starts at page {tenk_start}", file=sys.stderr)
+        # Save first ~5000 chars of pre-10K pages for metadata fallback
+        pre_parts = []
+        for p in pages:
+            if p.page_number >= tenk_start:
+                break
+            pre_parts.append(p.text)
+            if sum(len(t) for t in pre_parts) > 5000:
+                break
+        pre_10k_text = "\n".join(pre_parts)[:5000]
         pages = [p for p in pages if p.page_number >= tenk_start]
 
     sections = split_sections(pages)
@@ -244,6 +254,18 @@ def process_pdf(pdf_path: Path, output_dir: Path, verbose: bool = False) -> Proc
     cover_fields: list[tuple[str, str]] = []
     if COVER_PAGE in sections:
         cover_fields = extract_cover_fields(sections[COVER_PAGE].text)
+
+    # For combined documents, if company/ticker weren't found in the 10-K
+    # cover page, search the pre-10K annual report pages (shareholder letter
+    # area often contains "(NYSE: TICKER)" patterns).
+    if pre_10k_text:
+        field_labels = {label for label, _ in cover_fields}
+        if "Company" not in field_labels or "Ticker" not in field_labels:
+            pre_fields = extract_cover_fields(pre_10k_text)
+            for label, value in pre_fields:
+                if label not in field_labels:
+                    cover_fields.append((label, value))
+                    field_labels.add(label)
 
     # Search for scale hint in financial statement text
     scale_hint: str | None = None

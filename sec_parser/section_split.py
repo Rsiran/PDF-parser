@@ -183,11 +183,43 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
         return False
     if _TOC_LINE_NUMBER.search(line):
         return False
+    # Reject lines that start with a lowercase word or conjunction — these are
+    # mid-sentence references (e.g. "and the Consolidated Statements of Cash
+    # Flows on" or "Refer to Consolidated Statements of...").
+    line_stripped = line.lstrip()
+    if line_stripped and line_stripped[0].islower():
+        return False
+    # Reject lines starting with "Refer", "and", "or", "the", "See" — references
+    prefix_word = line_stripped.split()[0] if line_stripped.split() else ""
+    if prefix_word.lower() in ("and", "or", "the", "refer", "see", "selected"):
+        return False
     # Reject lines where the pattern is followed by significant trailing prose
     # (e.g. "Notes to Financial Statements included in Item 8 of this...")
     trailing = page_text[match.end():line_end].strip()
     if len(trailing) > 50:
         return False
+    # Reject headings that are about *analysis/discussion* of statements rather
+    # than the actual statements (e.g. "Consolidated Balance Sheets and Cash
+    # Flows Analysis" in JPM combined annual report).
+    if trailing and re.search(
+        r"\b(?:ANALYSIS|DISCUSSION|SUMMARY|HIGHLIGHTS?|OVERVIEW|SELECTED|DATA)\b",
+        trailing,
+        re.IGNORECASE,
+    ):
+        return False
+    # Reject lines where the matched heading is followed by punctuation that
+    # indicates it's a mid-sentence reference rather than a standalone heading
+    # (e.g. "Consolidated balance sheets." or "Consolidated balance sheets,")
+    if trailing and trailing[0] in ".;,":
+        return False
+    # Reject lines with trailing content starting with lowercase or "at"/"as"
+    # (e.g. "Consolidated balance sheets at fair value")
+    if trailing:
+        first_trailing_word = trailing.split()[0] if trailing.split() else ""
+        if first_trailing_word and first_trailing_word[0].islower():
+            return False
+        if first_trailing_word.lower() in ("at", "as"):
+            return False
     return True
 
 

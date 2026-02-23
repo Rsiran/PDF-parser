@@ -174,7 +174,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
     if "Company" not in labels:
         # Pattern: "(EXCHANGE: TICKER)" often preceded by company name
         m = re.search(
-            r"([A-Z][\w\s&.,'-]+?)\s*\((?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\)",
+            r"([A-Z][\w &.,'-]+?)\s*\((?:NYSE|NASDAQ|Nasdaq|TSX|LSE)[:\s]+([A-Z]{1,5})\)",
             text,
         )
         if m:
@@ -190,6 +190,7 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
             )
             if m:
                 fields.append(("Company", m.group(1).strip().rstrip(",")))
+
 
     # Fallback ticker: "NYSE: KO" or "NASDAQ: NBIS" anywhere in text
     if "Ticker" not in labels and not ticker_found:

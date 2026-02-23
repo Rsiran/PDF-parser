@@ -9,9 +9,9 @@
 - [x] US-002: Preserve first-row column headers in financial tables (only strip date rows AFTER first data row, not the header row)
 
 ### Phase 3: JPM Combined Report Fixes
-- [ ] US-003: Fix JPM cover page metadata extraction (add NYSE/NASDAQ fallback pattern for company/ticker)
-- [ ] US-004: Fix JPM financial statement section boundaries (prefer pages with numeric tabular data over MDA discussion pages)
-- [ ] US-005: Fix JPM Notes section boundary (extend end boundary to cover full 150-page notes range)
+- [x] US-003: Fix JPM cover page metadata extraction (add NYSE/NASDAQ fallback pattern for company/ticker)
+- [x] US-004: Fix JPM financial statement section boundaries (prefer pages with numeric tabular data over MDA discussion pages)
+- [x] US-005: Fix JPM Notes section boundary (extend end boundary to cover full 150-page notes range)
 
 ### Phase 4: Address Parsing
 - [ ] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
