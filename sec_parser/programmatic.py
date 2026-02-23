@@ -687,7 +687,7 @@ def _is_prose_table(table: list[list[str]]) -> bool:
         return False
 
     max_cols = max(len(row) for row in table)
-    if max_cols <= 6:
+    if max_cols < 6:
         return False  # Financial tables commonly have 4-6 columns
 
     # Gather non-empty cells
@@ -698,7 +698,7 @@ def _is_prose_table(table: list[list[str]]) -> bool:
     # Check numeric ratio
     numeric_count = sum(1 for c in all_cells if _is_numeric(c) and len(c) < 30)
     numeric_ratio = numeric_count / len(all_cells)
-    if numeric_ratio > 0.25:
+    if numeric_ratio > 0.15:
         return False  # Has substantial numeric data — likely a real table
 
     # Check if rows reconstruct readable prose (long joined text, short cells)

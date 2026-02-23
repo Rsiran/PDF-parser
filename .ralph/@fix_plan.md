@@ -1,35 +1,25 @@
-# Round 4 Fix Plan
+# Round 5 Fix Plan
 
 ## Priority Order (dependency-aware)
 
-### Phase 1: Prose-vs-Table Discrimination
-- [x] US-001: Detect and reject false prose tables (heuristic in programmatic.py to identify >6-col tables with word-fragment cells, discard or convert to prose)
+### Phase 1: Prose-Table Discrimination (tighten thresholds)
+- [x] US-001: Tighten _is_prose_table() thresholds — max_cols >= 6 (was > 6), numeric_ratio > 0.15 (was > 0.25)
 
-### Phase 2: Column Header Restoration
-- [x] US-002: Preserve first-row column headers in financial tables (only strip date rows AFTER first data row, not the header row)
+### Phase 2: Section Boundary Fixes
+- [ ] US-002: Cap Risk Factors at 25 pages to prevent duplication (add to _MAX_PAGES in section_split.py)
 
-### Phase 3: JPM Combined Report Fixes
-- [x] US-003: Fix JPM cover page metadata extraction (add NYSE/NASDAQ fallback pattern for company/ticker)
-- [x] US-004: Fix JPM financial statement section boundaries (prefer pages with numeric tabular data over MDA discussion pages)
-- [x] US-005: Fix JPM Notes section boundary (extend end boundary to cover full 150-page notes range)
+### Phase 3: Table Rendering
+- [ ] US-003: Fix AAPL Comprehensive Income to render as markdown table (text-based fallback in pipeline.py/programmatic.py)
 
-### Phase 4: Address Parsing
-- [x] US-006: Filter cover page label fragments from address field (strip "incorporation or organization", "Identification Number", etc.)
+### Phase 4: Header Merging
+- [ ] US-004: Merge double-header date rows (month-day + year) into single header rows in programmatic.py
 
-### Phase 5: Missing Section Detection
-- [x] US-007: Detect AAPL Risk Factors section (fixed by US-004 heading match improvements)
+### Phase 5: XOM Cash Flow Fixes
+- [ ] US-005: Fix missing "Postretirement benefits expense" row (check orphaned-row filters in programmatic.py)
+- [ ] US-006: Fix concatenated values in "Inflows from noncontrolling" row (split_single_col_row() in programmatic.py)
 
-### Phase 6: Page Artifact Cleanup
-- [x] US-008: Strip page number artifacts from notes and prose (F-xx, standalone numbers, running headers)
-
-### Phase 7: Stretch
-- [x] US-009: Fix XOM financial statements to render as markdown tables (text-based parsing when pdfplumber tables lack labels; minor header garbling remains)
-- [x] US-010: Investigated IREN25 cash flow FY2023 column truncation (try alternative pdfplumber settings)
-- [x] US-011: Exhibit garbling (cosmetic, deferred)
-- [x] US-012: Fix section header canonical mismatches (skip rows ending with ":")
-- [x] US-013: Fix Gemini notes extraction error for AAPL (handle None in str.join)
-- [x] US-014: XOM share repurchase table missing data rows
-- [x] US-015: Fix XOM MDA section boundary (stub-forward detection)
+### Phase 6: Table Deduplication
+- [ ] US-007: Deduplicate AAPL MDA tables — skip tables with >70% matching row labels vs previous table
 
 ## Verification
 After each fix, run:
