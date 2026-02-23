@@ -130,16 +130,30 @@ def extract_cover_fields(text: str) -> list[tuple[str, str]]:
         if len(state) < 60:
             fields.append(("State of Incorporation", state))
 
-    # Address — "(Address of principal executive offices...)"
+    # Address — multi-line capture above "(Address of principal executive offices...)"
     m = re.search(
-        r"^(.+)\n\s*\((?:Address|address)\s+of\s+principal\s+executive\s+offic",
+        r"\((?:Address|address)\s+of\s+principal\s+executive\s+offic",
         text,
-        re.MULTILINE,
     )
     if m:
-        address = m.group(1).strip()
-        if len(address) < 120:
-            fields.append(("Address", address))
+        # Look at the 1-3 lines before this match
+        before = text[:m.start()]
+        lines_before = [l.strip() for l in before.splitlines() if l.strip()]
+        # Take up to 3 lines before, filtering out non-address content
+        addr_parts = []
+        for line in reversed(lines_before[-3:]):
+            # Stop if we hit something that's not an address line
+            if re.match(r"(?:Commission|File\s+Number|Form\s+10|UNITED\s+STATES|SECURITIES)", line, re.IGNORECASE):
+                break
+            if len(line) > 120:
+                break
+            if re.match(r"^\(", line):  # another parenthetical descriptor
+                break
+            addr_parts.insert(0, line)
+        if addr_parts:
+            address = ", ".join(addr_parts)
+            if len(address) < 200:
+                fields.append(("Address", address))
 
     # Phone — pattern like "(xxx) xxx-xxxx" or "xxx-xxx-xxxx" near
     # "Registrant's telephone number"
@@ -331,6 +345,149 @@ def collapse_row(row: list[str]) -> list[str]:
             i += 1
 
     return merged
+
+
+def _collapse_table_positional(table: list[list[str]]) -> list[list[str]]:
+    """Collapse a table with position-aware alignment for wide sparse tables.
+
+    Normal tables (< 10 raw columns) use standard collapse_row().
+    Wide sparse tables (≥ 10 raw columns, e.g. stockholders' equity) get
+    position-aware handling: a column map is built from the fullest rows,
+    and each row's values are placed into the correct logical column based
+    on their raw cell positions.
+
+    This prevents sparse rows like SBC (which only populate APIC and Total
+    columns) from being left-shifted by collapse_row()'s empty-cell stripping.
+    """
+    if not table:
+        return []
+
+    max_raw_cols = max(len(row) for row in table)
+    if max_raw_cols < 10:
+        # Normal table — standard collapse
+        return [collapse_row(row) for row in table]
+
+    # --- Wide sparse table: position-aware collapse ---
+
+    # Step 1: Find which raw cell positions hold data across all rows.
+    # Build a "column map": list of raw indices that are value columns.
+    # We look at the rows with the MOST non-empty cells (typically "Balance" rows).
+    row_fill_counts = []
+    for ri, row in enumerate(table):
+        non_empty = sum(1 for c in row if (c or "").strip())
+        row_fill_counts.append((non_empty, ri))
+    row_fill_counts.sort(reverse=True)
+
+    # Use the top ~3 fullest rows to determine the column positions
+    ref_positions: set[int] = set()
+    for _, ri in row_fill_counts[:3]:
+        row = table[ri]
+        # After collapsing currency symbols ($+value), identify which raw
+        # positions are "anchor" positions (where values land)
+        i = 0
+        while i < len(row):
+            cell = (row[i] or "").strip()
+            if cell in ("$", "€", "£"):
+                # Currency symbol — the anchor position is the symbol position
+                ref_positions.add(i)
+                # Skip past the value cell
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                i = j + 1 if j < len(row) else i + 1
+            elif cell:
+                ref_positions.add(i)
+                i += 1
+            else:
+                i += 1
+
+    if not ref_positions:
+        return [collapse_row(row) for row in table]
+
+    # Sort into a column map: ordered list of raw positions → logical column indices
+    col_map = sorted(ref_positions)
+    num_cols = len(col_map)
+
+    if num_cols < 3:
+        # Too few columns detected — fall back to standard collapse
+        return [collapse_row(row) for row in table]
+
+    # Step 2: For each row, place values into logical columns
+    result: list[list[str]] = []
+    for row in table:
+        # First, do the standard currency/paren merging per-cell
+        # but track which raw position each merged value came from
+        merged_with_pos: list[tuple[int, str]] = []
+        i = 0
+        while i < len(row):
+            cell = (row[i] or "").strip()
+            if cell in ("$", "€", "£"):
+                anchor = i
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                if j < len(row):
+                    next_val = (row[j] or "").strip()
+                    if next_val.startswith("(") and not next_val.endswith(")"):
+                        k = j + 1
+                        while k < len(row) and not (row[k] or "").strip():
+                            k += 1
+                        if k < len(row) and (row[k] or "").strip() == ")":
+                            merged_with_pos.append((anchor, f"{cell} {next_val})"))
+                            i = k + 1
+                            continue
+                    merged_with_pos.append((anchor, f"{cell} {next_val}"))
+                    i = j + 1
+                else:
+                    merged_with_pos.append((anchor, cell))
+                    i += 1
+            elif cell.startswith("(") and not cell.endswith(")") and re.match(r"^\([\d,]+\.?\d*$", cell):
+                anchor = i
+                j = i + 1
+                while j < len(row) and not (row[j] or "").strip():
+                    j += 1
+                if j < len(row) and (row[j] or "").strip() == ")":
+                    merged_with_pos.append((anchor, f"{cell})"))
+                    i = j + 1
+                else:
+                    merged_with_pos.append((anchor, cell))
+                    i += 1
+            elif cell == "%" and merged_with_pos:
+                prev_pos, prev_val = merged_with_pos[-1]
+                merged_with_pos[-1] = (prev_pos, prev_val + "%")
+                i += 1
+            elif cell == ")":
+                i += 1
+            elif cell:
+                merged_with_pos.append((i, cell))
+                i += 1
+            else:
+                i += 1
+
+        if not merged_with_pos:
+            continue
+
+        # Map each value to its nearest logical column
+        out_row = [""] * num_cols
+        used: set[int] = set()
+        for raw_pos, val in merged_with_pos:
+            # Find the closest column map position
+            best_col = min(range(num_cols), key=lambda c: abs(col_map[c] - raw_pos))
+            # If already used, try adjacent
+            if best_col in used:
+                for offset in range(1, num_cols):
+                    if best_col + offset < num_cols and best_col + offset not in used:
+                        best_col = best_col + offset
+                        break
+                    if best_col - offset >= 0 and best_col - offset not in used:
+                        best_col = best_col - offset
+                        break
+            out_row[best_col] = val
+            used.add(best_col)
+
+        result.append(out_row)
+
+    return result
 
 
 # Numeric value token in financial tables (for splitting single-column rows)
@@ -638,6 +795,96 @@ def _strip_note_ref_columns(tables: list[list[list[str]]]) -> list[list[list[str
     return result
 
 
+def _recover_orphaned_text_rows(
+    section_text: str,
+    first_table: list[list[str]],
+) -> list[list[str]]:
+    """Recover financial data rows from section text not captured by pdfplumber.
+
+    pdfplumber sometimes starts its table extraction after a leading data row
+    (e.g. "Cash, cash equivalents, beginning balances $ 29,943 $ 30,737").
+    This function finds such rows in the text before the first table row and
+    returns them as split multi-column lists ready to prepend to the table.
+    """
+    if not first_table or not section_text:
+        return []
+
+    # Find the label of the first non-empty table row to locate where the
+    # table starts in the raw text
+    first_label = ""
+    for row in first_table:
+        cell = (row[0] if row else "").strip()
+        if cell:
+            first_label = cell
+            break
+    if not first_label:
+        return []
+
+    # For single-column tables, the label may include values concatenated
+    # (e.g. "Operating activities:"); extract just the label part
+    first_label_words = re.split(r"\s+\d", first_label)[0].strip().rstrip(":")
+
+    text_lines = section_text.splitlines()
+
+    # Find the line index in text where the first table row label appears
+    table_start_idx = -1
+    for idx, line in enumerate(text_lines):
+        if first_label_words and first_label_words.lower() in line.lower():
+            table_start_idx = idx
+            break
+
+    if table_start_idx <= 0:
+        return []
+
+    # Collect text lines before the table that contain financial values.
+    # Join continuation lines: a line without values followed by a line with values.
+    # Pattern: detect lines with $ + number patterns (actual financial data).
+    _dollar_val = re.compile(r"\$\s*[\d,]+")
+
+    orphaned: list[list[str]] = []
+    i = 0
+    while i < table_start_idx:
+        line = text_lines[i].strip()
+        # Skip headers, scale indicators, date headers, empty lines
+        if not line or re.match(r"(?i)^\(?\s*in\s+(?:thousands|millions|billions)", line):
+            i += 1
+            continue
+        # Skip title lines (all caps, short)
+        if line.isupper() and len(line) < 80:
+            i += 1
+            continue
+        # Skip standalone date/year header lines
+        if re.match(r"^(?:Years?\s+ended|September|October|November|December|January|February|March|April|May|June|July|August)\s", line, re.IGNORECASE):
+            i += 1
+            continue
+        if re.match(r"^\d{4}(?:\s+\d{4})*\s*$", line):
+            i += 1
+            continue
+
+        # Check if this line has dollar values
+        if _dollar_val.search(line):
+            parsed = split_single_col_row(line)
+            if len(parsed) >= 2:
+                orphaned.append(parsed)
+            i += 1
+            continue
+
+        # Check if next line has dollar values (continuation pattern)
+        if i + 1 < table_start_idx:
+            next_line = text_lines[i + 1].strip()
+            if _dollar_val.search(next_line):
+                joined = line + " " + next_line
+                parsed = split_single_col_row(joined)
+                if len(parsed) >= 2:
+                    orphaned.append(parsed)
+                i += 2
+                continue
+
+        i += 1
+
+    return orphaned
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -684,10 +931,11 @@ def tables_to_markdown(
     if not filtered_tables:
         return section_text
 
-    # Collapse all rows
+    # Collapse all rows, with position-aware handling for wide sparse tables
+    # (e.g. stockholders' equity) where column alignment matters.
     collapsed_tables: list[list[list[str]]] = []
     for table in filtered_tables:
-        collapsed = [collapse_row(row) for row in table]
+        collapsed = _collapse_table_positional(table)
         # Filter out completely empty rows
         collapsed = [r for r in collapsed if any(c.strip() for c in r)]
         if collapsed:
@@ -705,6 +953,14 @@ def tables_to_markdown(
         if dominant_len <= 1:
             collapsed_tables[ti] = [split_single_col_row(r[0] if r else "") for r in table]
 
+    # Recover financial data rows from section text that pdfplumber missed.
+    # e.g. "Cash, cash equivalents, beginning balances $ 29,943 $ 30,737"
+    # appearing in text before the first table row but not in any table.
+    if collapsed_tables:
+        orphaned = _recover_orphaned_text_rows(section_text, collapsed_tables[0])
+        if orphaned:
+            collapsed_tables[0] = orphaned + collapsed_tables[0]
+
     # Strip Note reference columns (small integers between label and financial data)
     collapsed_tables = _strip_note_ref_columns(collapsed_tables)
 
@@ -713,8 +969,23 @@ def tables_to_markdown(
     # like "Cash, beginning of period  January 26, 2025").
     _scale_re = re.compile(r"^\(?\s*in\s+(?:thousands|millions|billions)", re.IGNORECASE)
     _date_only_re = re.compile(
-        r"^(?:January|February|March|April|May|June|July|August|September|October|November|December)"
-        r"\s+\d{1,2},?\s*(?:\d{4})?\s*$",
+        r"^(?:"
+        # Month Day, Year — e.g. "September 28, 2024"
+        r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{1,2},?\s*(?:\d{4})?"
+        r"|"
+        # Standalone year(s) — e.g. "2024" or "2025 2024"
+        r"\d{4}(?:\s+\d{4})*"
+        r"|"
+        # Period descriptions — e.g. "Three Months Ended June 30, 2025"
+        r"(?:Three|Six|Nine|Twelve)\s+Months?\s+Ended\b.*"
+        r"|"
+        # Year/Period Ended — e.g. "Year Ended December 31, 2024"
+        r"(?:Year|Period)\s+Ended\b.*"
+        r"|"
+        # Fiscal year labels — e.g. "Fiscal Year 2024"
+        r"Fiscal\s+Year\s+\d{4}"
+        r")\s*$",
         re.IGNORECASE,
     )
     for ti, table in enumerate(collapsed_tables):
@@ -855,22 +1126,14 @@ def process_notes_fallback(
     section_text: str,
     tables: list[list[list[str]]],
 ) -> str:
-    """Process Notes section without LLM — clean prose and render tables inline.
+    """Process Notes section without LLM — clean prose only.
 
-    Unlike financial statements, Notes tables don't use taxonomy normalization.
-    Each table uses its own first-row headers (handled by tables_to_markdown with
-    the per-table header priority from Fix 1B).
+    When Gemini is unavailable, the raw text already contains table data inline.
+    Appending pdfplumber tables would duplicate content (the same data appears
+    both as raw text and as fragmented pdfplumber tables). So we just clean the
+    prose and return it — no table rendering.
     """
-    # Start with prose cleanup to get ### headings, then append rendered tables
-    prose = clean_prose(section_text)
-    if not tables:
-        return prose
-
-    table_md = tables_to_markdown(section_text, tables)
-    # If tables were rendered, append them after the prose
-    if "|" in table_md:
-        return prose + "\n\n" + table_md
-    return prose
+    return clean_prose(section_text)
 
 
 # ---------------------------------------------------------------------------

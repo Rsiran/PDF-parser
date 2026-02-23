@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,21 +76,62 @@ def match_line_item(
     return NormResult(None, best_score, "none")
 
 
+_CURRENT_HEADER = re.compile(r"(?:^|\b)current\s+(?:assets|liabilities)", re.IGNORECASE)
+_NON_CURRENT_HEADER = re.compile(
+    r"(?:non[- ]?current|long[- ]?term)\s+(?:assets|liabilities)", re.IGNORECASE
+)
+
+# Ambiguous labels that need current/non-current context to disambiguate
+_CONTEXT_OVERRIDES: dict[str, dict[str, str]] = {
+    "marketable securities": {
+        "non-current": "Long-Term Investments",
+        "current": "Short-Term Investments",
+    },
+    "other current liabilities": {
+        "current": "Other Current Liabilities",
+    },
+    "other non-current liabilities": {
+        "non-current": "Other Non-Current Liabilities",
+    },
+}
+
+
 def normalize_table_rows(
     rows: list[list[str]], taxonomy: dict
 ) -> list[list[str]]:
-    """Add 'Canonical' column at index 1 to each row."""
+    """Add 'Canonical' column at index 1 to each row.
+
+    Tracks current vs non-current context from section header rows
+    (e.g. "Current assets:", "Non-current liabilities:") to disambiguate
+    labels that appear in both sections (e.g. "Marketable securities").
+    """
     from .programmatic import _is_numeric
 
     alias_index = _build_alias_index(taxonomy)
     result = []
+    context = ""  # "current" or "non-current"
+
     for row in rows:
         first_cell = row[0] if row else ""
-        if not first_cell.strip() or _is_numeric(first_cell):
+        stripped = first_cell.strip()
+
+        if not stripped or _is_numeric(stripped):
             canonical = ""
         else:
-            match = match_line_item(first_cell, taxonomy, alias_index=alias_index)
-            canonical = match.canonical if match.canonical else ""
+            # Update context from section header rows
+            if _NON_CURRENT_HEADER.search(stripped):
+                context = "non-current"
+            elif _CURRENT_HEADER.search(stripped):
+                context = "current"
+
+            # Check for context-dependent override
+            override = _CONTEXT_OVERRIDES.get(stripped.lower(), {})
+            if context and context in override:
+                canonical = override[context]
+            else:
+                match = match_line_item(stripped, taxonomy, alias_index=alias_index)
+                canonical = match.canonical if match.canonical else ""
+
         new_row = [row[0], canonical] + row[1:]
         result.append(new_row)
     return result

@@ -13,6 +13,7 @@ INCOME_STATEMENT = "income_statement"
 BALANCE_SHEET = "balance_sheet"
 CASH_FLOW = "cash_flow"
 STOCKHOLDERS_EQUITY = "stockholders_equity"
+COMPREHENSIVE_INCOME = "comprehensive_income"
 NOTES = "notes"
 MDA = "mda"
 MARKET_RISK = "market_risk"
@@ -29,6 +30,7 @@ SECTION_TITLES = {
     BALANCE_SHEET: "Consolidated Balance Sheets",
     CASH_FLOW: "Consolidated Statements of Cash Flows",
     STOCKHOLDERS_EQUITY: "Consolidated Statements of Stockholders' Equity",
+    COMPREHENSIVE_INCOME: "Consolidated Statements of Comprehensive Income",
     NOTES: "Notes to Financial Statements",
     MDA: "Management's Discussion and Analysis",
     MARKET_RISK: "Quantitative and Qualitative Disclosures About Market Risk",
@@ -46,6 +48,13 @@ SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         re.compile(
             r"(?:CONDENSED\s+)?CONSOLIDATED\s+STATEMENTS?\s+OF\s+(?:INCOME|OPERATIONS|EARNINGS)"
             r"(?:\s+AND\s+COMPREHENSIVE\s+(?:INCOME|LOSS)(?:\s*\(LOSS\))?)?",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        COMPREHENSIVE_INCOME,
+        re.compile(
+            r"(?:CONDENSED\s+)?CONSOLIDATED\s+STATEMENTS?\s+OF\s+COMPREHENSIVE\s+(?:INCOME|LOSS)(?:\s*\(LOSS\))?",
             re.IGNORECASE,
         ),
     ),
@@ -183,10 +192,22 @@ def _is_heading_match(page_text: str, match: re.Match[str]) -> bool:
 
 
 def _has_toc_entries(text: str) -> bool:
-    """Check if the page has multiple lines ending with page numbers (TOC entries)."""
-    toc_entry_count = sum(1 for line in text.split("\n")
-                         if _TOC_LINE_NUMBER.search(line))
-    return toc_entry_count >= 3
+    """Check if the page has multiple lines with page numbers (TOC entries).
+
+    Recognizes two formats:
+    - Trailing page numbers: "Item 1. Business ........... 5"
+    - Leading page numbers (two-column layout): "52 Introduction"
+    """
+    lines = text.split("\n")
+    # Trailing page numbers (original check)
+    trailing_count = sum(1 for line in lines if _TOC_LINE_NUMBER.search(line))
+    if trailing_count >= 3:
+        return True
+    # Leading page numbers: lines starting with 1-3 digit number followed by text
+    # e.g. "52 Introduction" or "172 Consolidated Financial Statements"
+    _LEADING_PAGE_NUM = re.compile(r"^\s*\d{1,3}\s+[A-Z]")
+    leading_count = sum(1 for line in lines if _LEADING_PAGE_NUM.search(line))
+    return leading_count >= 5
 
 
 def _is_toc_page(page: PageData) -> bool:
@@ -204,12 +225,14 @@ def _is_toc_page(page: PageData) -> bool:
             for line in lines[:3]
         )
 
-        # Check if the page has financial data patterns
+        # Check if the page has actual financial data (not just section titles
+        # that mention financial terms, which is common in TOC entries like
+        # "stockholders' equity; interest rates and interest differentials").
+        # Require dollar amounts or aggregated totals with numbers nearby.
         financial_patterns = re.compile(
-            r"(?:total\s+(?:assets|liabilities|revenue|equity|current)|"
-            r"net\s+(?:income|loss|cash)|"
-            r"operating\s+(?:income|loss|expenses)|"
-            r"stockholders|shareholders|"
+            r"(?:total\s+(?:assets|liabilities|revenue|equity|current)\s.*[\d,]+|"
+            r"net\s+(?:income|loss|cash)\s.*[\d,]+|"
+            r"operating\s+(?:income|loss|expenses)\s.*[\d,]+|"
             r"\$\s*[\d,]+)",
             re.IGNORECASE,
         )
@@ -348,6 +371,7 @@ def split_sections(pages: list[PageData]) -> dict[str, SectionData]:
     # Cap them to avoid absorbing unrelated trailing content.
     _MAX_PAGES: dict[str, int] = {
         INCOME_STATEMENT: 5,
+        COMPREHENSIVE_INCOME: 5,
         BALANCE_SHEET: 5,
         CASH_FLOW: 5,
         STOCKHOLDERS_EQUITY: 5,

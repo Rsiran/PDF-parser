@@ -130,6 +130,82 @@ def _collapse_with_factor(line: str, factor: int) -> str | None:
     return None
 
 
+# Financial terms used for de-interleave scoring
+_FINANCIAL_TERMS = [
+    "common", "stock", "preferred", "treasury", "retained", "earnings",
+    "capital", "additional", "paid", "accumulated", "comprehensive",
+    "total", "shares", "par", "value", "surplus",
+]
+
+# Simple word list for detecting garbled text (low dictionary coverage)
+_COMMON_WORDS = set(_FINANCIAL_TERMS + [
+    "in", "of", "the", "and", "for", "net", "loss", "income", "other",
+    "equity", "debt", "assets", "cash", "from", "non", "per", "share",
+    "changes", "statement", "balance", "sheet", "flow", "operating",
+])
+
+
+def _try_deinterleave(text: str) -> str:
+    """Try to de-interleave garbled text from rotated PDF headers.
+
+    Returns the de-interleaved text if successful, original text otherwise.
+
+    Some PDFs have rotated/vertical column headers where pdfplumber extracts
+    characters from multiple overlapping words interleaved, e.g.
+    "CPoremfemrreond SSttcoockk" instead of "Common Stock / Preferred Stock".
+    """
+    stripped = text.strip()
+    if len(stripped) < 10 or len(stripped) >= 60:
+        return text
+    # Skip if contains digits (likely financial values, not headers)
+    if any(c.isdigit() for c in stripped):
+        return text
+
+    # Check if text already looks reasonable (has recognizable words)
+    words_lower = stripped.lower().split()
+    recognized = sum(1 for w in words_lower if w in _COMMON_WORDS)
+    if len(words_lower) > 0 and recognized / len(words_lower) >= 0.4:
+        return text  # Already looks fine
+
+    # Try splitting into 2 or 3 interleaved streams
+    # Try both with and without spaces (spaces may be interleaved too)
+    best_result = None
+    best_score = 0
+
+    candidates = [stripped]
+    no_spaces = stripped.replace(" ", "")
+    if no_spaces != stripped:
+        candidates.append(no_spaces)
+
+    for candidate in candidates:
+        for n_streams in (2, 3):
+            if len(candidate) < n_streams * 4:
+                continue
+            streams = [[] for _ in range(n_streams)]
+            for idx, ch in enumerate(candidate):
+                streams[idx % n_streams].append(ch)
+            parts = ["".join(s).strip() for s in streams]
+
+            # Score: count how many financial terms appear in the parts
+            score = 0
+            for part in parts:
+                part_lower = part.lower()
+                for term in _FINANCIAL_TERMS:
+                    if term in part_lower:
+                        score += len(term)  # Weight by term length
+
+            if score > best_score:
+                best_score = score
+                best_result = " / ".join(p for p in parts if p)
+
+    # Require a meaningful score to accept the de-interleaved version
+    # At least 2 financial terms worth of characters matched
+    if best_score >= 10 and best_result:
+        return best_result
+
+    return text
+
+
 def _clean_tables(raw_tables: list) -> list[list[list[str]]]:
     """Replace None cells with empty strings in raw pdfplumber tables."""
     return [
@@ -152,12 +228,23 @@ def extract_pdf(path: Path) -> list[PageData]:
             text = _collapse_repeated_chars(text)  # Fix character-tripled bold text
             raw_tables = page.extract_tables() or []
             tables = _clean_tables(raw_tables)
+            # Apply character collapse to table cells (bold rendering artifacts)
+            # then try de-interleaving rotated header text
+            tables = [
+                [[_try_deinterleave(_try_collapse_line(cell)) for cell in row] for row in table]
+                for table in tables
+            ]
 
             # Fallback: if default strategy found nothing and the page looks
             # like it contains financial data, retry with text-based strategy
             if not tables and _FINANCIAL_HINT.search(text):
                 raw_tables = page.extract_tables(_TEXT_TABLE_SETTINGS) or []
                 tables = _clean_tables(raw_tables)
+                # Apply character collapse then de-interleave to table cells
+                tables = [
+                    [[_try_deinterleave(_try_collapse_line(cell)) for cell in row] for row in table]
+                    for table in tables
+                ]
 
             pages.append(PageData(page_number=i + 1, text=text, tables=tables))
     return pages
