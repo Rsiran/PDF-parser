@@ -645,24 +645,41 @@ def _build_header_rows(
 ) -> list[list[str]]:
     """Build one or two header rows from detected period/year info."""
     rows: list[list[str]] = []
+    data_cols = col_count - 1  # first column is the line-item label
 
-    if period_headers and year_columns and len(year_columns) >= col_count - 1:
-        # Two-row header: periods spanning columns, then years
-        # e.g. ["", "Three Months Ended June 30,", "", "Six Months Ended June 30,", ""]
-        if len(period_headers) >= 2 and col_count == 5:
-            # 4-data-column layout: 2 periods × 2 years each
-            row1 = ["", period_headers[0], "", period_headers[1], ""]
-            rows.append(row1)
-        elif len(period_headers) == 1 and col_count == 3:
-            row1 = ["", period_headers[0], ""]
-            rows.append(row1)
+    if period_headers and year_columns and len(year_columns) >= data_cols:
+        yrs = year_columns[:data_cols]
 
-        row2 = [""] + year_columns[: col_count - 1]
-        rows.append(row2)
-    elif year_columns and len(year_columns) >= col_count - 1:
-        rows.append([""] + year_columns[: col_count - 1])
+        if len(period_headers) == 1:
+            # Single period spanning all data columns — merge with years.
+            # e.g. "June 30," + ["2025", "2024"] → ["June 30, 2025", "June 30, 2024"]
+            merged = [""] + [f"{period_headers[0]} {y}" for y in yrs]
+            rows.append(merged)
+        elif len(period_headers) == data_cols:
+            # One period per data column — merge 1-to-1.
+            # e.g. ["September 27,", "September 28,"] + ["2025", "2024"]
+            #   → ["September 27, 2025", "September 28, 2024"]
+            merged = [""] + [f"{p} {y}" for p, y in zip(period_headers, yrs)]
+            rows.append(merged)
+        elif len(period_headers) * 2 == data_cols:
+            # Two years per period (10-Q 4-column layout).
+            # e.g. ["Three Months Ended Dec 31,", "Six Months Ended Dec 31,"]
+            #   + ["2025", "2024", "2025", "2024"]
+            merged = [""] + [
+                f"{period_headers[i // 2]} {y}" for i, y in enumerate(yrs)
+            ]
+            rows.append(merged)
+        else:
+            # Fallback — keep two rows
+            row1 = [""] + period_headers[:data_cols]
+            while len(row1) < col_count:
+                row1.append("")
+            rows.append(row1)
+            rows.append([""] + yrs)
+    elif year_columns and len(year_columns) >= data_cols:
+        rows.append([""] + year_columns[:data_cols])
     elif period_headers:
-        row = [""] + period_headers[: col_count - 1]
+        row = [""] + period_headers[:data_cols]
         while len(row) < col_count:
             row.append("")
         rows.append(row)
@@ -1295,6 +1312,34 @@ def tables_to_markdown(
             # Use header row to set column count if it has more columns
             if len(first_row) > col_count:
                 col_count = len(first_row)
+
+            # Check if the second row is a continuation header (e.g. years
+            # below a date header like "December 31," / "2025  2024")
+            if all_data_rows:
+                second_row = all_data_rows[0]
+                second_non_empty = [c for c in second_row if c.strip()]
+                _year_re = re.compile(r"^\d{4}$")
+                second_is_header = (
+                    len(second_non_empty) >= 1
+                    and all(not _is_numeric(c) or _year_re.match(c.strip()) for c in second_non_empty)
+                    and any(_year_re.match(c.strip()) for c in second_non_empty)
+                )
+                if second_is_header:
+                    # Merge: combine first and second header rows.
+                    # For cells where the first row has a date fragment
+                    # and the second has the year, join them.
+                    merged_header = []
+                    for ci in range(max(len(first_row), len(second_row))):
+                        c1 = first_row[ci].strip() if ci < len(first_row) else ""
+                        c2 = second_row[ci].strip() if ci < len(second_row) else ""
+                        if c1 and c2:
+                            merged_header.append(f"{c1} {c2}")
+                        elif c2:
+                            merged_header.append(c2)
+                        else:
+                            merged_header.append(c1)
+                    header_rows = [merged_header]
+                    all_data_rows = all_data_rows[1:]
         else:
             # Build header rows from detected text headers (periods/years)
             header_rows = _build_header_rows(period_headers, year_columns, col_count)
