@@ -1151,6 +1151,50 @@ def _clean_raw_text(text: str) -> str:
     return "\n".join(lines)
 
 
+_GRAND_TOTAL_RE = re.compile(
+    r"^Total\s+liabilities\s+and\s+stockholders",
+    re.IGNORECASE,
+)
+
+
+def _truncate_after_grand_total(tables: list[list[list[str]]]) -> list[list[list[str]]]:
+    """Truncate each table after a grand-total row to exclude footnote sub-tables.
+
+    Some filings (e.g. JPM) append VIE or other footnote tables after the main
+    balance sheet's "Total liabilities and stockholders' equity" row. These sub-tables
+    corrupt the main statement. We cut the table after the grand-total row.
+    """
+    result = []
+    for table in tables:
+        cut_idx = None
+        for ri, row in enumerate(table):
+            # Join first few text cells to reconstruct split labels
+            # e.g. ['Total liabilities an', '', 'd stockholders' eq', 'uity', ...]
+            text_parts = []
+            for c in row[:5]:
+                cs = (c or '').strip()
+                if cs and not re.match(r'^[\$€£]?\s*[\d,()\.\-—–%]+\$?$', cs):
+                    text_parts.append(cs)
+                elif cs:
+                    break
+            # Join parts, detecting mid-word splits (same logic as collapse_row)
+            label = text_parts[0] if text_parts else ""
+            for tp in text_parts[1:]:
+                if label and tp and label[-1].isalpha() and tp[0].islower():
+                    label += tp  # mid-word split
+                else:
+                    label += " " + tp
+            if _GRAND_TOTAL_RE.match(label):
+                # Check it has at least one numeric value (not just a header)
+                if any(_is_numeric(c) for c in row[1:]):
+                    cut_idx = ri
+                    break  # use first grand-total match
+        if cut_idx is not None and cut_idx < len(table) - 1:
+            table = table[:cut_idx + 1]
+        result.append(table)
+    return result
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -1229,6 +1273,9 @@ def tables_to_markdown(
 
     # Strip Note reference columns (small integers between label and financial data)
     collapsed_tables = _strip_note_ref_columns(collapsed_tables)
+
+    # Truncate tables after grand-total rows to exclude footnote sub-tables
+    collapsed_tables = _truncate_after_grand_total(collapsed_tables)
 
     # Fix 5A: Strip mid-table repeated headers (scale indicators only;
     # date rows are preserved — they may be column headers or data rows
