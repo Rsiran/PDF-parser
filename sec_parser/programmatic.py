@@ -830,7 +830,10 @@ def _strip_note_ref_columns(tables: list[list[list[str]]]) -> list[list[list[str
                     note_cells.append(cell)
             if note_cells:
                 note_count = sum(1 for c in note_cells if _NOTE_REF.match(c))
-                has_financial = any("$" in c or ("," in c and len(c) > 3) for c in note_cells)
+                has_financial = any(
+                    ("$" in c or ("," in c and len(c) > 3)) and not _NOTE_REF.match(c)
+                    for c in note_cells
+                )
                 all_small = all(
                     _NOTE_REF.match(c) and all(int(x.strip()) <= 30 for x in c.split(","))
                     for c in note_cells if _NOTE_REF.match(c)

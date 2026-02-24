@@ -442,6 +442,7 @@ def process_pdf(
                 statements[stmt_type] = stmt_data
 
     validation_md = ""
+    results = []
     if statements:
         results = run_all_checks(statements)
         validation_md = render_validation_markdown(results)
