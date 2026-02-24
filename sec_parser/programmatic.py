@@ -349,6 +349,29 @@ def collapse_row(row: list[str]) -> list[str]:
         else:
             i += 1
 
+    # Second pass: merge consecutive text-only cells at the start of the row
+    # into a single label cell.  This handles wide tables where pdfplumber's
+    # text strategy splits a label like "Lending- and deposit-related fees"
+    # across two cells: ['Lending- and deposit-rela', 'ted fees', '7,606', ...]
+    if len(merged) >= 3:
+        first_numeric = None
+        for idx, cell in enumerate(merged):
+            if _is_numeric(cell) or cell.startswith("$") or cell.startswith("€") or cell.startswith("£"):
+                first_numeric = idx
+                break
+        if first_numeric is not None and first_numeric >= 2:
+            # Join text fragments, detecting mid-word splits:
+            # "deposit-rela" + "ted fees" → "deposit-related fees" (no space)
+            # "applicable to" + "common" → "applicable to common" (space)
+            parts = merged[:first_numeric]
+            label = parts[0]
+            for p in parts[1:]:
+                if label and p and label[-1].isalpha() and p[0].islower():
+                    label += p  # mid-word split — join without space
+                else:
+                    label += " " + p
+            merged = [label] + merged[first_numeric:]
+
     return merged
 
 
