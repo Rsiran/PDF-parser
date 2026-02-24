@@ -349,6 +349,29 @@ def collapse_row(row: list[str]) -> list[str]:
         else:
             i += 1
 
+    # Second pass: merge consecutive text-only cells at the start of the row
+    # into a single label cell.  This handles wide tables where pdfplumber's
+    # text strategy splits a label like "Lending- and deposit-related fees"
+    # across two cells: ['Lending- and deposit-rela', 'ted fees', '7,606', ...]
+    if len(merged) >= 3:
+        first_numeric = None
+        for idx, cell in enumerate(merged):
+            if _is_numeric(cell) or cell.startswith("$") or cell.startswith("€") or cell.startswith("£"):
+                first_numeric = idx
+                break
+        if first_numeric is not None and first_numeric >= 2:
+            # Join text fragments, detecting mid-word splits:
+            # "deposit-rela" + "ted fees" → "deposit-related fees" (no space)
+            # "applicable to" + "common" → "applicable to common" (space)
+            parts = merged[:first_numeric]
+            label = parts[0]
+            for p in parts[1:]:
+                if label and p and label[-1].isalpha() and p[0].islower():
+                    label += p  # mid-word split — join without space
+                else:
+                    label += " " + p
+            merged = [label] + merged[first_numeric:]
+
     return merged
 
 
@@ -645,24 +668,41 @@ def _build_header_rows(
 ) -> list[list[str]]:
     """Build one or two header rows from detected period/year info."""
     rows: list[list[str]] = []
+    data_cols = col_count - 1  # first column is the line-item label
 
-    if period_headers and year_columns and len(year_columns) >= col_count - 1:
-        # Two-row header: periods spanning columns, then years
-        # e.g. ["", "Three Months Ended June 30,", "", "Six Months Ended June 30,", ""]
-        if len(period_headers) >= 2 and col_count == 5:
-            # 4-data-column layout: 2 periods × 2 years each
-            row1 = ["", period_headers[0], "", period_headers[1], ""]
-            rows.append(row1)
-        elif len(period_headers) == 1 and col_count == 3:
-            row1 = ["", period_headers[0], ""]
-            rows.append(row1)
+    if period_headers and year_columns and len(year_columns) >= data_cols:
+        yrs = year_columns[:data_cols]
 
-        row2 = [""] + year_columns[: col_count - 1]
-        rows.append(row2)
-    elif year_columns and len(year_columns) >= col_count - 1:
-        rows.append([""] + year_columns[: col_count - 1])
+        if len(period_headers) == 1:
+            # Single period spanning all data columns — merge with years.
+            # e.g. "June 30," + ["2025", "2024"] → ["June 30, 2025", "June 30, 2024"]
+            merged = [""] + [f"{period_headers[0]} {y}" for y in yrs]
+            rows.append(merged)
+        elif len(period_headers) == data_cols:
+            # One period per data column — merge 1-to-1.
+            # e.g. ["September 27,", "September 28,"] + ["2025", "2024"]
+            #   → ["September 27, 2025", "September 28, 2024"]
+            merged = [""] + [f"{p} {y}" for p, y in zip(period_headers, yrs)]
+            rows.append(merged)
+        elif len(period_headers) * 2 == data_cols:
+            # Two years per period (10-Q 4-column layout).
+            # e.g. ["Three Months Ended Dec 31,", "Six Months Ended Dec 31,"]
+            #   + ["2025", "2024", "2025", "2024"]
+            merged = [""] + [
+                f"{period_headers[i // 2]} {y}" for i, y in enumerate(yrs)
+            ]
+            rows.append(merged)
+        else:
+            # Fallback — keep two rows
+            row1 = [""] + period_headers[:data_cols]
+            while len(row1) < col_count:
+                row1.append("")
+            rows.append(row1)
+            rows.append([""] + yrs)
+    elif year_columns and len(year_columns) >= data_cols:
+        rows.append([""] + year_columns[:data_cols])
     elif period_headers:
-        row = [""] + period_headers[: col_count - 1]
+        row = [""] + period_headers[:data_cols]
         while len(row) < col_count:
             row.append("")
         rows.append(row)
@@ -830,7 +870,10 @@ def _strip_note_ref_columns(tables: list[list[list[str]]]) -> list[list[list[str
                     note_cells.append(cell)
             if note_cells:
                 note_count = sum(1 for c in note_cells if _NOTE_REF.match(c))
-                has_financial = any("$" in c or ("," in c and len(c) > 3) for c in note_cells)
+                has_financial = any(
+                    ("$" in c or ("," in c and len(c) > 3)) and not _NOTE_REF.match(c)
+                    for c in note_cells
+                )
                 all_small = all(
                     _NOTE_REF.match(c) and all(int(x.strip()) <= 30 for x in c.split(","))
                     for c in note_cells if _NOTE_REF.match(c)
@@ -1077,6 +1120,81 @@ def _parse_text_as_table(
     return _render_markdown_table(header_rows, data_rows, col_count)
 
 
+_FOOTER_RE = re.compile(
+    r"^\s*.{3,50}\s*\|\s*\d{4}\s+Form\s+10-[KQ](?:/A)?\s*\|\s*\d{1,3}\s*$",
+    re.IGNORECASE,
+)
+_PAGE_NUM_RE = re.compile(r"^\s*\d{1,3}\s*$")
+_FPAGE_RE = re.compile(r"^\s*F-\d{1,3}\s*$")
+_SEE_NOTES_RE = re.compile(
+    r"^\s*(?:See|The)\s+(?:accompanying\s+)?(?:Notes?\s+to|The\s+Notes)",
+    re.IGNORECASE,
+)
+_FORM_FOOTER_RE = re.compile(
+    r"^\s*\d{1,3}\s+.{3,40}\s+(?:Form\s+10-[KQ]|Annual\s+Report)",
+    re.IGNORECASE,
+)
+
+
+def _clean_raw_text(text: str) -> str:
+    """Clean raw section text when tables_to_markdown falls back to text.
+
+    Strips standalone page numbers, page footers, F-N references,
+    and boilerplate "See Notes" lines.
+    """
+    lines = text.splitlines()
+    lines = [l for l in lines if not _PAGE_NUM_RE.match(l)]
+    lines = [l for l in lines if not _FOOTER_RE.match(l)]
+    lines = [l for l in lines if not _FPAGE_RE.match(l)]
+    lines = [l for l in lines if not _SEE_NOTES_RE.match(l)]
+    lines = [l for l in lines if not _FORM_FOOTER_RE.match(l)]
+    return "\n".join(lines)
+
+
+_GRAND_TOTAL_RE = re.compile(
+    r"^Total\s+liabilities\s+and\s+stockholders",
+    re.IGNORECASE,
+)
+
+
+def _truncate_after_grand_total(tables: list[list[list[str]]]) -> list[list[list[str]]]:
+    """Truncate each table after a grand-total row to exclude footnote sub-tables.
+
+    Some filings (e.g. JPM) append VIE or other footnote tables after the main
+    balance sheet's "Total liabilities and stockholders' equity" row. These sub-tables
+    corrupt the main statement. We cut the table after the grand-total row.
+    """
+    result = []
+    for table in tables:
+        cut_idx = None
+        for ri, row in enumerate(table):
+            # Join first few text cells to reconstruct split labels
+            # e.g. ['Total liabilities an', '', 'd stockholders' eq', 'uity', ...]
+            text_parts = []
+            for c in row[:5]:
+                cs = (c or '').strip()
+                if cs and not re.match(r'^[\$€£]?\s*[\d,()\.\-—–%]+\$?$', cs):
+                    text_parts.append(cs)
+                elif cs:
+                    break
+            # Join parts, detecting mid-word splits (same logic as collapse_row)
+            label = text_parts[0] if text_parts else ""
+            for tp in text_parts[1:]:
+                if label and tp and label[-1].isalpha() and tp[0].islower():
+                    label += tp  # mid-word split
+                else:
+                    label += " " + tp
+            if _GRAND_TOTAL_RE.match(label):
+                # Check it has at least one numeric value (not just a header)
+                if any(_is_numeric(c) for c in row[1:]):
+                    cut_idx = ri
+                    break  # use first grand-total match
+        if cut_idx is not None and cut_idx < len(table) - 1:
+            table = table[:cut_idx + 1]
+        result.append(table)
+    return result
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -1093,10 +1211,7 @@ def tables_to_markdown(
     - When normalized_data_out is provided (a list), appends normalized rows to it
     """
     if not tables:
-        # Strip standalone page numbers before returning raw text
-        lines = section_text.splitlines()
-        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
-        return "\n".join(lines)
+        return _clean_raw_text(section_text)
 
     # Filter out "tables" that are really just text paragraphs
     # (pdfplumber sometimes misidentifies prose as a table)
@@ -1124,7 +1239,7 @@ def tables_to_markdown(
         filtered_tables.append(table)
 
     if not filtered_tables:
-        return section_text
+        return _clean_raw_text(section_text)
 
     # Collapse all rows, with position-aware handling for wide sparse tables
     # (e.g. stockholders' equity) where column alignment matters.
@@ -1158,6 +1273,9 @@ def tables_to_markdown(
 
     # Strip Note reference columns (small integers between label and financial data)
     collapsed_tables = _strip_note_ref_columns(collapsed_tables)
+
+    # Truncate tables after grand-total rows to exclude footnote sub-tables
+    collapsed_tables = _truncate_after_grand_total(collapsed_tables)
 
     # Fix 5A: Strip mid-table repeated headers (scale indicators only;
     # date rows are preserved — they may be column headers or data rows
@@ -1215,10 +1333,7 @@ def tables_to_markdown(
                         labeled_rows += 1
                         break
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
-        # Strip standalone page numbers before returning raw text fallback
-        lines = section_text.splitlines()
-        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
-        return "\n".join(lines)
+        return _clean_raw_text(section_text)
 
     # Strip standalone page number rows (single cell, 1-3 digit integer)
     for table in collapsed_tables:
@@ -1292,6 +1407,34 @@ def tables_to_markdown(
             # Use header row to set column count if it has more columns
             if len(first_row) > col_count:
                 col_count = len(first_row)
+
+            # Check if the second row is a continuation header (e.g. years
+            # below a date header like "December 31," / "2025  2024")
+            if all_data_rows:
+                second_row = all_data_rows[0]
+                second_non_empty = [c for c in second_row if c.strip()]
+                _year_re = re.compile(r"^\d{4}$")
+                second_is_header = (
+                    len(second_non_empty) >= 1
+                    and all(not _is_numeric(c) or _year_re.match(c.strip()) for c in second_non_empty)
+                    and any(_year_re.match(c.strip()) for c in second_non_empty)
+                )
+                if second_is_header:
+                    # Merge: combine first and second header rows.
+                    # For cells where the first row has a date fragment
+                    # and the second has the year, join them.
+                    merged_header = []
+                    for ci in range(max(len(first_row), len(second_row))):
+                        c1 = first_row[ci].strip() if ci < len(first_row) else ""
+                        c2 = second_row[ci].strip() if ci < len(second_row) else ""
+                        if c1 and c2:
+                            merged_header.append(f"{c1} {c2}")
+                        elif c2:
+                            merged_header.append(c2)
+                        else:
+                            merged_header.append(c1)
+                    header_rows = [merged_header]
+                    all_data_rows = all_data_rows[1:]
         else:
             # Build header rows from detected text headers (periods/years)
             header_rows = _build_header_rows(period_headers, year_columns, col_count)

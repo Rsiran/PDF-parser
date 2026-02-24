@@ -125,7 +125,12 @@ def normalize_table_rows(
                 context = "current"
 
             # Section sub-headers end with ":" — don't normalize them
-            if stripped.endswith(":"):
+            # Also skip rows where all value cells are empty (section headers)
+            value_cells = row[1:]
+            is_header_row = stripped.endswith(":") or (
+                value_cells and all(not c.strip() for c in value_cells)
+            )
+            if is_header_row:
                 canonical = ""
             else:
                 # Check for context-dependent override
