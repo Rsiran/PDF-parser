@@ -1097,6 +1097,37 @@ def _parse_text_as_table(
     return _render_markdown_table(header_rows, data_rows, col_count)
 
 
+_FOOTER_RE = re.compile(
+    r"^\s*.{3,50}\s*\|\s*\d{4}\s+Form\s+10-[KQ](?:/A)?\s*\|\s*\d{1,3}\s*$",
+    re.IGNORECASE,
+)
+_PAGE_NUM_RE = re.compile(r"^\s*\d{1,3}\s*$")
+_FPAGE_RE = re.compile(r"^\s*F-\d{1,3}\s*$")
+_SEE_NOTES_RE = re.compile(
+    r"^\s*(?:See|The)\s+(?:accompanying\s+)?(?:Notes?\s+to|The\s+Notes)",
+    re.IGNORECASE,
+)
+_FORM_FOOTER_RE = re.compile(
+    r"^\s*\d{1,3}\s+.{3,40}\s+(?:Form\s+10-[KQ]|Annual\s+Report)",
+    re.IGNORECASE,
+)
+
+
+def _clean_raw_text(text: str) -> str:
+    """Clean raw section text when tables_to_markdown falls back to text.
+
+    Strips standalone page numbers, page footers, F-N references,
+    and boilerplate "See Notes" lines.
+    """
+    lines = text.splitlines()
+    lines = [l for l in lines if not _PAGE_NUM_RE.match(l)]
+    lines = [l for l in lines if not _FOOTER_RE.match(l)]
+    lines = [l for l in lines if not _FPAGE_RE.match(l)]
+    lines = [l for l in lines if not _SEE_NOTES_RE.match(l)]
+    lines = [l for l in lines if not _FORM_FOOTER_RE.match(l)]
+    return "\n".join(lines)
+
+
 def tables_to_markdown(
     section_text: str,
     tables: list[list[list[str]]],
@@ -1113,10 +1144,7 @@ def tables_to_markdown(
     - When normalized_data_out is provided (a list), appends normalized rows to it
     """
     if not tables:
-        # Strip standalone page numbers before returning raw text
-        lines = section_text.splitlines()
-        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
-        return "\n".join(lines)
+        return _clean_raw_text(section_text)
 
     # Filter out "tables" that are really just text paragraphs
     # (pdfplumber sometimes misidentifies prose as a table)
@@ -1144,7 +1172,7 @@ def tables_to_markdown(
         filtered_tables.append(table)
 
     if not filtered_tables:
-        return section_text
+        return _clean_raw_text(section_text)
 
     # Collapse all rows, with position-aware handling for wide sparse tables
     # (e.g. stockholders' equity) where column alignment matters.
@@ -1235,10 +1263,7 @@ def tables_to_markdown(
                         labeled_rows += 1
                         break
     if total_rows > 0 and labeled_rows / total_rows < 0.2:
-        # Strip standalone page numbers before returning raw text fallback
-        lines = section_text.splitlines()
-        lines = [l for l in lines if not re.match(r"^\s*\d{1,3}\s*$", l)]
-        return "\n".join(lines)
+        return _clean_raw_text(section_text)
 
     # Strip standalone page number rows (single cell, 1-3 digit integer)
     for table in collapsed_tables:
